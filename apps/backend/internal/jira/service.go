@@ -114,6 +114,7 @@ func (s *Service) SetConfig(ctx context.Context, req *SetConfigRequest) (*JiraCo
 		SiteURL:           normalizeSiteURL(req.SiteURL),
 		Email:             req.Email,
 		AuthMethod:        req.AuthMethod,
+		InstanceType:      normalizeInstanceType(req.InstanceType),
 		DefaultProjectKey: req.DefaultProjectKey,
 	}
 	if err := s.store.UpsertConfig(ctx, cfg); err != nil {
@@ -333,11 +334,15 @@ func (s *Service) invalidateClient() {
 // (post-save re-test).
 func (s *Service) resolveCredentials(ctx context.Context, req *SetConfigRequest) (*JiraConfig, string, error) {
 	cfg := &JiraConfig{
-		SiteURL:    normalizeSiteURL(req.SiteURL),
-		Email:      req.Email,
-		AuthMethod: req.AuthMethod,
+		SiteURL:      normalizeSiteURL(req.SiteURL),
+		Email:        req.Email,
+		AuthMethod:   req.AuthMethod,
+		InstanceType: req.InstanceType,
 	}
 	if req.Secret != "" {
+		if cfg.InstanceType == "" {
+			cfg.InstanceType = InstanceTypeCloud
+		}
 		return cfg, req.Secret, nil
 	}
 	if s.secrets == nil {
@@ -366,6 +371,12 @@ func (s *Service) resolveCredentials(ctx context.Context, req *SetConfigRequest)
 		if cfg.AuthMethod == "" {
 			cfg.AuthMethod = stored.AuthMethod
 		}
+		if cfg.InstanceType == "" {
+			cfg.InstanceType = stored.InstanceType
+		}
+	}
+	if cfg.InstanceType == "" {
+		cfg.InstanceType = InstanceTypeCloud
 	}
 	return cfg, secret, nil
 }
@@ -374,17 +385,45 @@ func validateConfigRequest(req *SetConfigRequest) error {
 	if req.SiteURL == "" {
 		return errors.New("siteUrl required")
 	}
+	instance := normalizeInstanceType(req.InstanceType)
+	switch instance {
+	case InstanceTypeCloud, InstanceTypeServer:
+	default:
+		return fmt.Errorf("unknown instance type: %q", req.InstanceType)
+	}
 	switch req.AuthMethod {
 	case AuthMethodAPIToken:
+		// API tokens are Cloud-only — Atlassian Server/DC rejects Basic auth
+		// with `id.atlassian.com` tokens and redirects to a login page, which
+		// makes the failure mode opaque. Catch it at config time.
+		if instance != InstanceTypeCloud {
+			return errors.New("api_token auth is supported only on Atlassian Cloud — use pat for Server/DC")
+		}
 		if req.Email == "" {
 			return errors.New("email required for api_token auth")
 		}
+	case AuthMethodPAT:
+		// Personal Access Tokens are a Server/DC concept; Cloud expects
+		// id.atlassian.com tokens via Basic, not Bearer.
+		if instance != InstanceTypeServer {
+			return errors.New("pat auth is supported only on Jira Server/Data Center — use api_token for Cloud")
+		}
 	case AuthMethodSessionCookie:
-		// email is optional for session cookies.
+		// email is optional for session cookies; works on both Cloud and Server.
 	default:
 		return fmt.Errorf("unknown auth method: %q", req.AuthMethod)
 	}
 	return nil
+}
+
+// normalizeInstanceType maps empty string (legacy rows + clients that haven't
+// adopted the field yet) to cloud, leaves any other value untouched so the
+// caller can reject unknown types.
+func normalizeInstanceType(s string) string {
+	if s == "" {
+		return InstanceTypeCloud
+	}
+	return s
 }
 
 // normalizeSiteURL trims trailing slashes and prepends https:// when the user

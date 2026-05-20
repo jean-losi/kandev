@@ -240,6 +240,218 @@ func TestCloudClient_SiteURLTrailingSlash_Stripped(t *testing.T) {
 	}
 }
 
+// --- Server / Data Center mode ---
+
+// serverClient builds a CloudClient configured for a self-hosted Server/DC
+// instance against the test server.
+func serverClient(ts *httptest.Server, method, secret string) *CloudClient {
+	cfg := &JiraConfig{
+		SiteURL:      ts.URL,
+		Email:        "user@example.com",
+		AuthMethod:   method,
+		InstanceType: InstanceTypeServer,
+	}
+	return NewCloudClient(cfg, secret)
+}
+
+func TestCloudClient_ServerMode_UsesV2Paths(t *testing.T) {
+	var gotPath string
+	ts := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accountId":"a"}`))
+	})
+	c := serverClient(ts, AuthMethodPAT, "pat-token")
+	if _, err := c.TestAuth(context.Background()); err != nil {
+		t.Fatalf("test auth: %v", err)
+	}
+	if gotPath != "/rest/api/2/myself" {
+		t.Errorf("path: got %q, want /rest/api/2/myself", gotPath)
+	}
+}
+
+func TestCloudClient_PAT_SendsBearer(t *testing.T) {
+	var gotAuth string
+	ts := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	c := serverClient(ts, AuthMethodPAT, "pat-token-value")
+	if _, err := c.TestAuth(context.Background()); err != nil {
+		t.Fatalf("test auth: %v", err)
+	}
+	if gotAuth != "Bearer pat-token-value" {
+		t.Errorf("auth header = %q, want Bearer pat-token-value", gotAuth)
+	}
+}
+
+func TestCloudClient_ServerMode_SearchTickets_StartAtPagination(t *testing.T) {
+	var gotPath string
+	var gotBody string
+	ts := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"startAt": 50,
+			"maxResults": 50,
+			"total": 120,
+			"issues": [
+				{"key":"P-51","fields":{"summary":"a","status":{},"project":{},"issuetype":{}}},
+				{"key":"P-52","fields":{"summary":"b","status":{},"project":{},"issuetype":{}}}
+			]
+		}`))
+	})
+	c := serverClient(ts, AuthMethodPAT, "tok")
+	res, err := c.SearchTickets(context.Background(), "project = P", "50", 50)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if gotPath != "/rest/api/2/search" {
+		t.Errorf("path: got %q, want /rest/api/2/search", gotPath)
+	}
+	if !strings.Contains(gotBody, `"startAt":50`) {
+		t.Errorf("body missing startAt=50: %q", gotBody)
+	}
+	if res.IsLast {
+		t.Error("expected IsLast=false (52 of 120)")
+	}
+	if res.NextPageToken != "52" {
+		t.Errorf("next page token = %q, want 52", res.NextPageToken)
+	}
+	if len(res.Tickets) != 2 || res.Tickets[0].Key != "P-51" {
+		t.Errorf("tickets: %+v", res.Tickets)
+	}
+}
+
+func TestCloudClient_ServerMode_SearchTickets_LastPage(t *testing.T) {
+	ts := newMockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"startAt": 100,
+			"maxResults": 50,
+			"total": 110,
+			"issues": [
+				{"key":"P-101","fields":{"summary":"x","status":{},"project":{},"issuetype":{}}}
+			]
+		}`))
+	})
+	c := serverClient(ts, AuthMethodPAT, "tok")
+	res, err := c.SearchTickets(context.Background(), "x", "100", 50)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	// 100 + 1 = 101 < 110 (total). Still expect IsLast=false because we only
+	// received 1 of the 10 remaining issues — but the loop above said total=110
+	// and we got 1 issue. Cover the actual last-page case in a separate
+	// scenario where the math agrees with no further work.
+	if res.IsLast {
+		t.Error("expected IsLast=false when more issues remain")
+	}
+	if res.NextPageToken != "101" {
+		t.Errorf("next page token = %q, want 101", res.NextPageToken)
+	}
+}
+
+func TestCloudClient_ServerMode_SearchTickets_TerminalPage(t *testing.T) {
+	ts := newMockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"startAt": 100,
+			"maxResults": 50,
+			"total": 102,
+			"issues": [
+				{"key":"P-101","fields":{"summary":"x","status":{},"project":{},"issuetype":{}}},
+				{"key":"P-102","fields":{"summary":"y","status":{},"project":{},"issuetype":{}}}
+			]
+		}`))
+	})
+	c := serverClient(ts, AuthMethodPAT, "tok")
+	res, err := c.SearchTickets(context.Background(), "x", "100", 50)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if !res.IsLast {
+		t.Error("expected IsLast=true on terminal page")
+	}
+	if res.NextPageToken != "" {
+		t.Errorf("expected empty NextPageToken on terminal page, got %q", res.NextPageToken)
+	}
+}
+
+func TestCloudClient_ServerMode_GetTicket_UsesV2(t *testing.T) {
+	var paths []string
+	ts := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/transitions"):
+			_, _ = w.Write([]byte(`{"transitions":[]}`))
+		default:
+			_, _ = w.Write([]byte(`{"key":"P-1","fields":{"summary":"s","description":"plain text","status":{},"project":{},"issuetype":{}}}`))
+		}
+	})
+	c := serverClient(ts, AuthMethodPAT, "tok")
+	ticket, err := c.GetTicket(context.Background(), "P-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if ticket.Description != "plain text" {
+		t.Errorf("description: %q", ticket.Description)
+	}
+	wantPrefix := "/rest/api/2/issue/P-1"
+	for _, p := range paths {
+		if !strings.HasPrefix(p, wantPrefix) {
+			t.Errorf("path %q does not use v2 base", p)
+		}
+	}
+}
+
+func TestCloudClient_ServerMode_HtmlAuthHint_MentionsPAT(t *testing.T) {
+	ts := newMockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body><form action="/login.jsp"></form></body></html>`))
+	})
+	c := serverClient(ts, AuthMethodPAT, "bad")
+	res, err := c.TestAuth(context.Background())
+	if err != nil {
+		t.Fatalf("test auth: %v", err)
+	}
+	if res.OK {
+		t.Fatal("expected OK=false")
+	}
+	if !strings.Contains(res.Error, "Personal Access Token") {
+		t.Errorf("expected PAT hint, got %q", res.Error)
+	}
+}
+
+func TestCloudClient_CloudMode_APITokenOnServer_HintFlagsMismatch(t *testing.T) {
+	ts := newMockServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html>login</html>`))
+	})
+	// Force the misconfiguration: instance=server but auth=api_token (which is
+	// what existing users saw before this change). The hint should call out
+	// the mismatch and direct them to switch to PAT.
+	cfg := &JiraConfig{
+		SiteURL:      ts.URL,
+		Email:        "u@x",
+		AuthMethod:   AuthMethodAPIToken,
+		InstanceType: InstanceTypeServer,
+	}
+	c := NewCloudClient(cfg, "tok")
+	res, _ := c.TestAuth(context.Background())
+	if res.OK {
+		t.Fatal("expected OK=false")
+	}
+	if !strings.Contains(res.Error, "Cloud-only") || !strings.Contains(res.Error, "PAT") {
+		t.Errorf("hint should explain mismatch + suggest PAT, got %q", res.Error)
+	}
+}
+
 func TestExtractDescription_Nil(t *testing.T) {
 	if got := extractDescription(nil); got != "" {
 		t.Errorf("nil → %q", got)

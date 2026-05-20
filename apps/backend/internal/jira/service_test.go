@@ -280,6 +280,15 @@ func TestService_Validation(t *testing.T) {
 		{"missing site", SetConfigRequest{AuthMethod: AuthMethodAPIToken, Email: "e"}},
 		{"missing email api_token", SetConfigRequest{SiteURL: "x", AuthMethod: AuthMethodAPIToken}},
 		{"bad auth", SetConfigRequest{SiteURL: "x", AuthMethod: "bogus"}},
+		{"bad instance", SetConfigRequest{SiteURL: "x", AuthMethod: AuthMethodPAT, InstanceType: "bogus"}},
+		{
+			"pat on cloud rejected",
+			SetConfigRequest{SiteURL: "x", AuthMethod: AuthMethodPAT, InstanceType: InstanceTypeCloud},
+		},
+		{
+			"api_token on server rejected",
+			SetConfigRequest{SiteURL: "x", AuthMethod: AuthMethodAPIToken, Email: "e", InstanceType: InstanceTypeServer},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -287,6 +296,42 @@ func TestService_Validation(t *testing.T) {
 				t.Error("expected validation error")
 			}
 		})
+	}
+}
+
+func TestService_SetConfig_PATOnServer_Accepted(t *testing.T) {
+	f := newSvcFixture(t)
+	ctx := context.Background()
+	cfg, err := f.svc.SetConfig(ctx, &SetConfigRequest{
+		SiteURL:      "https://jira.acme.com/",
+		AuthMethod:   AuthMethodPAT,
+		InstanceType: InstanceTypeServer,
+		Secret:       "pat-token",
+	})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if cfg.InstanceType != InstanceTypeServer {
+		t.Errorf("instance type round-trip: got %q", cfg.InstanceType)
+	}
+	if cfg.AuthMethod != AuthMethodPAT {
+		t.Errorf("auth method round-trip: got %q", cfg.AuthMethod)
+	}
+}
+
+func TestService_SetConfig_DefaultsInstanceTypeToCloud(t *testing.T) {
+	f := newSvcFixture(t)
+	ctx := context.Background()
+	cfg, err := f.svc.SetConfig(ctx, &SetConfigRequest{
+		SiteURL: "https://a.atlassian.net", Email: "u@x",
+		AuthMethod: AuthMethodAPIToken, Secret: "tok",
+		// InstanceType deliberately omitted — older clients did not send it.
+	})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if cfg.InstanceType != InstanceTypeCloud {
+		t.Errorf("expected default instance type cloud, got %q", cfg.InstanceType)
 	}
 }
 
