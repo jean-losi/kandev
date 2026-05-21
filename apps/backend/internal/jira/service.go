@@ -114,7 +114,7 @@ func (s *Service) SetConfig(ctx context.Context, req *SetConfigRequest) (*JiraCo
 		SiteURL:           normalizeSiteURL(req.SiteURL),
 		Email:             req.Email,
 		AuthMethod:        req.AuthMethod,
-		InstanceType:      normalizeInstanceType(req.InstanceType),
+		InstanceType:      req.InstanceType,
 		DefaultProjectKey: req.DefaultProjectKey,
 	}
 	if err := s.store.UpsertConfig(ctx, cfg); err != nil {
@@ -339,28 +339,30 @@ func (s *Service) resolveCredentials(ctx context.Context, req *SetConfigRequest)
 		AuthMethod:   req.AuthMethod,
 		InstanceType: req.InstanceType,
 	}
+	var secret string
 	if req.Secret != "" {
-		if cfg.InstanceType == "" {
-			cfg.InstanceType = InstanceTypeCloud
+		secret = req.Secret
+	} else {
+		if s.secrets == nil {
+			return nil, "", errors.New("no secret store configured")
 		}
-		return cfg, req.Secret, nil
+		var err error
+		secret, err = s.secrets.Reveal(ctx, SecretKey)
+		if err != nil {
+			// Don't conflate a transient secret-store failure with "no token
+			// stored". Surfacing the real error gives the user a path to retry
+			// instead of telling them to paste a token they already have.
+			s.log.Warn("jira: secret reveal failed", zap.Error(err))
+			return nil, "", fmt.Errorf("read jira secret: %w", err)
+		}
+		if secret == "" {
+			return nil, "", errors.New("no token stored — paste one to test")
+		}
 	}
-	if s.secrets == nil {
-		return nil, "", errors.New("no secret store configured")
-	}
-	secret, err := s.secrets.Reveal(ctx, SecretKey)
-	if err != nil {
-		// Don't conflate a transient secret-store failure with "no token
-		// stored". Surfacing the real error gives the user a path to retry
-		// instead of telling them to paste a token they already have.
-		s.log.Warn("jira: secret reveal failed", zap.Error(err))
-		return nil, "", fmt.Errorf("read jira secret: %w", err)
-	}
-	if secret == "" {
-		return nil, "", errors.New("no token stored — paste one to test")
-	}
-	// Merge with persisted config so the test uses saved site/email if the
-	// caller only passed a partial request.
+	// Merge with persisted config so a partial request still produces a usable
+	// triple. Applies to both the inline-secret and stored-secret paths: a
+	// pre-save TestConnection call may carry only the field the user just
+	// changed, and a post-save re-test sends an empty body.
 	if stored, _ := s.store.GetConfig(ctx); stored != nil {
 		if cfg.SiteURL == "" {
 			cfg.SiteURL = stored.SiteURL
@@ -378,6 +380,12 @@ func (s *Service) resolveCredentials(ctx context.Context, req *SetConfigRequest)
 	if cfg.InstanceType == "" {
 		cfg.InstanceType = InstanceTypeCloud
 	}
+	// Run the same auth/instance check the save path runs, so TestConnection
+	// reports invalid combos (e.g. pat+cloud, api_token+server) with a clear
+	// validation error instead of letting Jira return an opaque 401.
+	if err := validateAuthInstance(cfg.AuthMethod, cfg.InstanceType, cfg.Email); err != nil {
+		return nil, "", err
+	}
 	return cfg, secret, nil
 }
 
@@ -385,45 +393,53 @@ func validateConfigRequest(req *SetConfigRequest) error {
 	if req.SiteURL == "" {
 		return errors.New("siteUrl required")
 	}
-	instance := normalizeInstanceType(req.InstanceType)
-	switch instance {
+	// Require an explicit instanceType — defaulting to cloud here would let a
+	// stale client (one that pre-dates Server/DC support) silently downgrade
+	// a saved Server config back to Cloud on the next partial save.
+	switch req.InstanceType {
 	case InstanceTypeCloud, InstanceTypeServer:
+	case "":
+		return errors.New("instanceType required (cloud or server)")
 	default:
 		return fmt.Errorf("unknown instance type: %q", req.InstanceType)
 	}
-	switch req.AuthMethod {
+	return validateAuthInstance(req.AuthMethod, req.InstanceType, req.Email)
+}
+
+// validateAuthInstance enforces the supported (auth method, instance type)
+// combinations. Shared by config-save and the test-connection flow so a
+// pre-save test surfaces the same diagnostic the eventual save would, instead
+// of letting Jira return an opaque 401 for an unsupported combo.
+func validateAuthInstance(authMethod, instanceType, email string) error {
+	switch authMethod {
 	case AuthMethodAPIToken:
 		// API tokens are Cloud-only — Atlassian Server/DC rejects Basic auth
 		// with `id.atlassian.com` tokens and redirects to a login page, which
 		// makes the failure mode opaque. Catch it at config time.
-		if instance != InstanceTypeCloud {
+		if instanceType != InstanceTypeCloud {
 			return errors.New("api_token auth is supported only on Atlassian Cloud — use pat for Server/DC")
 		}
-		if req.Email == "" {
+		if email == "" {
 			return errors.New("email required for api_token auth")
 		}
 	case AuthMethodPAT:
 		// Personal Access Tokens are a Server/DC concept; Cloud expects
 		// id.atlassian.com tokens via Basic, not Bearer.
-		if instance != InstanceTypeServer {
+		if instanceType != InstanceTypeServer {
 			return errors.New("pat auth is supported only on Jira Server/Data Center — use api_token for Cloud")
 		}
 	case AuthMethodSessionCookie:
-		// email is optional for session cookies; works on both Cloud and Server.
+		// The client wraps the session secret under cloud.session.token and
+		// tenant.session.token — both Atlassian-Cloud-specific cookie names.
+		// Server/DC uses JSESSIONID, so the current wrapping is a no-op there;
+		// reject the combo until we add a Server-aware session-cookie path.
+		if instanceType != InstanceTypeCloud {
+			return errors.New("session_cookie auth is supported only on Atlassian Cloud — use pat for Server/DC")
+		}
 	default:
-		return fmt.Errorf("unknown auth method: %q", req.AuthMethod)
+		return fmt.Errorf("unknown auth method: %q", authMethod)
 	}
 	return nil
-}
-
-// normalizeInstanceType maps empty string (legacy rows + clients that haven't
-// adopted the field yet) to cloud, leaves any other value untouched so the
-// caller can reject unknown types.
-func normalizeInstanceType(s string) string {
-	if s == "" {
-		return InstanceTypeCloud
-	}
-	return s
 }
 
 // normalizeSiteURL trims trailing slashes and prepends https:// when the user

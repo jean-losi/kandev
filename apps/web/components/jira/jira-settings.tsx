@@ -85,11 +85,14 @@ function defaultAuthForInstance(instance: JiraInstanceType): JiraAuthMethod {
 
 // authAllowedForInstance reports whether an auth method is allowed for a given
 // instance type. Mirrors the backend validation so the user can't submit an
-// invalid combination.
+// invalid combination. session_cookie is Cloud-only today because the backend
+// wraps the secret under cloud.session.token / tenant.session.token cookie
+// names — Server/DC uses JSESSIONID, so the wrapping is a no-op there until we
+// add a Server-aware path.
 function authAllowedForInstance(auth: JiraAuthMethod, instance: JiraInstanceType): boolean {
-  if (auth === "session_cookie") return true;
   if (auth === "api_token") return instance === "cloud";
   if (auth === "pat") return instance === "server";
+  if (auth === "session_cookie") return instance === "cloud";
   return false;
 }
 
@@ -129,7 +132,7 @@ function InstanceFields({ form, loading, setForm }: InstanceFieldsProps) {
           }}
           disabled={loading}
         >
-          <SelectTrigger id="jira-instance" className="w-full">
+          <SelectTrigger id="jira-instance" className="w-full cursor-pointer">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -188,16 +191,18 @@ function AuthFields({ form, loading, update }: FieldsRowProps) {
           onValueChange={(v) => update("authMethod", v as JiraAuthMethod)}
           disabled={loading}
         >
-          <SelectTrigger id="jira-auth" className="w-full">
+          <SelectTrigger id="jira-auth" className="w-full cursor-pointer">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {form.instanceType === "cloud" ? (
-              <SelectItem value="api_token">API token (recommended)</SelectItem>
+              <>
+                <SelectItem value="api_token">API token (recommended)</SelectItem>
+                <SelectItem value="session_cookie">Browser session cookie</SelectItem>
+              </>
             ) : (
-              <SelectItem value="pat">Personal Access Token (recommended)</SelectItem>
+              <SelectItem value="pat">Personal Access Token</SelectItem>
             )}
-            <SelectItem value="session_cookie">Browser session cookie</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -340,7 +345,7 @@ function SecretField({
         <p className="text-xs text-muted-foreground">
           Create a token at{" "}
           <a
-            className="underline"
+            className="underline cursor-pointer"
             href="https://id.atlassian.com/manage-profile/security/api-tokens"
             target="_blank"
             rel="noreferrer"
@@ -356,7 +361,7 @@ function SecretField({
             <>
               {" "}
               (
-              <a className="underline" href={patHref} target="_blank" rel="noreferrer">
+              <a className="underline cursor-pointer" href={patHref} target="_blank" rel="noreferrer">
                 {patHref}
               </a>
               ){" "}
@@ -589,7 +594,16 @@ function EnabledPill() {
 // task presets live elsewhere because they scope per workspace.
 export function JiraConnectionSection() {
   const s = useJiraSettings();
-  const missingSecret = !s.config?.hasSecret && !s.form.secret;
+  // The stored secret is only safe to reuse when both auth method and
+  // (normalized) instance type still match what was saved. Switching, say,
+  // Cloud + api_token → Server + pat would otherwise silently keep the old
+  // token under the new auth mode and submit it to the wrong endpoint.
+  const savedInstance = s.config?.instanceType || "cloud";
+  const savedSecretMatchesMode =
+    !!s.config?.hasSecret &&
+    s.config?.authMethod === s.form.authMethod &&
+    savedInstance === s.form.instanceType;
+  const missingSecret = !savedSecretMatchesMode && !s.form.secret;
   // Email is only required for the Cloud + api_token combination. Server PAT
   // and session cookies authenticate the user out of the token itself.
   const emailRequired =
@@ -623,7 +637,7 @@ export function JiraConnectionSection() {
             form={s.form}
             loading={s.loading}
             update={s.update}
-            hasSavedSecret={!!s.config?.hasSecret}
+            hasSavedSecret={savedSecretMatchesMode}
             secretExpiresAt={s.config?.secretExpiresAt ?? null}
           />
           <TestResultAlert result={s.testResult} />

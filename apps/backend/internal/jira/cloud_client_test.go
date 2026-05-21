@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,9 +189,11 @@ func TestCloudClient_DoTransition_PostsBody(t *testing.T) {
 	ts := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
-		buf := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(buf)
-		gotBody = string(buf)
+		// io.ReadAll over a sized r.Body.Read: chunked transfer encoding
+		// sets ContentLength=-1 (panicking on make), and a single Read may
+		// return partial bytes even when the length is known.
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	c := clientTo(ts, AuthMethodAPIToken, "t")
@@ -290,9 +293,8 @@ func TestCloudClient_ServerMode_SearchTickets_StartAtPagination(t *testing.T) {
 	var gotBody string
 	ts := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		buf := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(buf)
-		gotBody = string(buf)
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"startAt": 50,
@@ -410,8 +412,10 @@ func TestCloudClient_ServerMode_GetTicket_UsesV2(t *testing.T) {
 
 func TestCloudClient_ServerMode_HtmlAuthHint_MentionsPAT(t *testing.T) {
 	ts := newMockServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
+		// Set headers before WriteHeader — once WriteHeader fires the response
+		// headers are committed and any later Header().Set is silently dropped.
 		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`<html><body><form action="/login.jsp"></form></body></html>`))
 	})
 	c := serverClient(ts, AuthMethodPAT, "bad")
@@ -429,8 +433,8 @@ func TestCloudClient_ServerMode_HtmlAuthHint_MentionsPAT(t *testing.T) {
 
 func TestCloudClient_CloudMode_APITokenOnServer_HintFlagsMismatch(t *testing.T) {
 	ts := newMockServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
 		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`<html>login</html>`))
 	})
 	// Force the misconfiguration: instance=server but auth=api_token (which is
