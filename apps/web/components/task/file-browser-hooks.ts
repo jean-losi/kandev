@@ -118,25 +118,33 @@ export function useFileBrowserSearch(sessionId: string) {
 }
 
 /** Apply incoming file changes to the tree by refreshing affected folders. */
-function applyFileChanges(ctx: {
+export function applyFileChanges(ctx: {
   client: ReturnType<typeof getWebSocketClient>;
   sessionId: string;
   expandedPaths: ReadonlySet<string>;
-  changes: Array<{ path: string }>;
+  changes: Array<{ path: string; operation?: string; repository_name?: string }>;
   setTree: React.Dispatch<React.SetStateAction<FileTreeNode | null>>;
   setLoadState: React.Dispatch<React.SetStateAction<LoadState>>;
 }) {
   const { client, sessionId, expandedPaths, changes, setTree, setLoadState } = ctx;
-  const candidates = new Set<string>();
+  const foldersToRefresh = new Set<string>();
   for (const change of changes) {
+    // `refresh` events have empty path; refresh root + every expanded folder under the affected repo so new files show up.
+    if (change.operation === "refresh") {
+      foldersToRefresh.add("");
+      const repo = change.repository_name;
+      for (const exp of expandedPaths) {
+        if (!repo || exp === repo || exp.startsWith(repo + "/")) {
+          foldersToRefresh.add(exp);
+        }
+      }
+      continue;
+    }
     const p = change.path;
     const lastSlash = p.lastIndexOf("/");
-    candidates.add(lastSlash === -1 ? "" : p.substring(0, lastSlash));
-    candidates.add(p);
-  }
-  const foldersToRefresh = new Set<string>();
-  for (const c of candidates) {
-    if (c === "" || expandedPaths.has(c)) foldersToRefresh.add(c);
+    const parent = lastSlash === -1 ? "" : p.substring(0, lastSlash);
+    if (parent === "" || expandedPaths.has(parent)) foldersToRefresh.add(parent);
+    if (p === "" || expandedPaths.has(p)) foldersToRefresh.add(p);
   }
   if (foldersToRefresh.size === 0) return;
 
@@ -175,7 +183,8 @@ function applyFileChanges(ctx: {
           }
           return node.children ? { ...node, children: node.children.map(patchNode) } : node;
         };
-        return patchNode(updated);
+        // Skip root: already merged above; re-matching folderUpdates.has("") here would overwrite preserved subtrees.
+        return { ...updated, children: updated.children?.map(patchNode) };
       });
       setLoadState("loaded");
     } catch (error) {
