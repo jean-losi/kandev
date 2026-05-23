@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { QueryProvider } from "@/lib/query/provider";
 import { StateProvider } from "@/components/state-provider";
 import { WebSocketConnector } from "@/components/ws-connector";
 import { ToastProvider } from "@/components/toast-provider";
@@ -65,28 +66,30 @@ export default async function RootLayout({
             }}
           />
         ) : null}
-        <StateProvider initialState={{ features }}>
-          <ThemeProvider>
-            <DiffWorkerPoolProvider>
-              <TooltipProvider>
-                <ToastProvider>
-                  <SessionFailureToastBridge />
-                  <SidebarViewsSyncBridge />
-                  <LogBufferBridge />
-                  <CommandRegistryProvider>
-                    <WebSocketConnector />
-                    <GlobalCommands />
-                    <CommandPanel />
-                    <RecentTaskSwitcher />
-                    <ConfigChatProvider>
-                      <QuickChatProvider>{children}</QuickChatProvider>
-                    </ConfigChatProvider>
-                  </CommandRegistryProvider>
-                </ToastProvider>
-              </TooltipProvider>
-            </DiffWorkerPoolProvider>
-          </ThemeProvider>
-        </StateProvider>
+        <QueryProvider>
+          <StateProvider initialState={{ features }}>
+            <ThemeProvider>
+              <DiffWorkerPoolProvider>
+                <TooltipProvider>
+                  <ToastProvider>
+                    <SessionFailureToastBridge />
+                    <SidebarViewsSyncBridge />
+                    <LogBufferBridge />
+                    <CommandRegistryProvider>
+                      <WebSocketConnector />
+                      <GlobalCommands />
+                      <CommandPanel />
+                      <RecentTaskSwitcher />
+                      <ConfigChatProvider>
+                        <QuickChatProvider>{children}</QuickChatProvider>
+                      </ConfigChatProvider>
+                    </CommandRegistryProvider>
+                  </ToastProvider>
+                </TooltipProvider>
+              </DiffWorkerPoolProvider>
+            </ThemeProvider>
+          </StateProvider>
+        </QueryProvider>
       </body>
     </html>
   );
