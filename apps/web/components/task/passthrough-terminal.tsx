@@ -249,6 +249,7 @@ export function PassthroughTerminal(props: PassthroughTerminalProps) {
   });
 
   usePendingCommand(pendingCommand, isConnected, wsRef, onCommandSent);
+  useMobileTouchScroll(refs.terminalRef, refs.xtermRef, isTerminalReady);
 
   return (
     <div
@@ -298,4 +299,90 @@ function usePendingCommand(
     }, 300);
     return () => clearTimeout(timer);
   }, [pendingCommand, isConnected, wsRef, onCommandSent]);
+}
+
+/**
+ * Wires touch-drag scrolling on the xterm viewport. xterm.js handles mouse
+ * wheel natively but not touch gestures — without this hook, swiping inside
+ * the terminal on mobile bubbles up and scrolls the page instead of the
+ * terminal's scrollback. Maps vertical drag delta to `terminal.scrollLines`.
+ *
+ * Only attaches on coarse-pointer devices (mobile/tablet) so desktop xterm
+ * behaviour stays unchanged.
+ */
+function useMobileTouchScroll(
+  terminalRef: React.RefObject<HTMLDivElement | null>,
+  xtermRef: React.RefObject<Terminal | null>,
+  isTerminalReady: boolean,
+) {
+  React.useEffect(() => {
+    if (!isTerminalReady) return;
+    const el = terminalRef.current;
+    const term = xtermRef.current;
+    if (!el || !term) return;
+
+    // Skip on fine-pointer devices — desktop mouse wheel scrolling is already
+    // handled by xterm and we don't want to interfere with text selection.
+    if (typeof window !== "undefined" && window.matchMedia) {
+      const coarse = window.matchMedia("(pointer: coarse)").matches;
+      if (!coarse) return;
+    }
+
+    // Compute the row height from xterm's internal render dimensions, with
+    // graceful fallback. The internal path is the xterm 5.x layout; if the
+    // shape ever changes we fall back to a CSS-derived estimate.
+    function rowHeightPx(): number {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const internal = (term as any)?._core?._renderService?.dimensions?.css?.cell?.height;
+      if (typeof internal === "number" && internal > 0) return internal;
+      if (el && term && term.rows > 0) {
+        const measured = el.clientHeight / term.rows;
+        if (measured > 0) return measured;
+      }
+      return 16;
+    }
+
+    let startY: number | null = null;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) {
+        startY = null;
+        return;
+      }
+      startY = e.touches[0].clientY;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (startY === null || e.touches.length !== 1) return;
+      const currentY = e.touches[0].clientY;
+      const dy = startY - currentY;
+      const rh = rowHeightPx();
+      const rows = Math.trunc(dy / rh);
+      if (rows !== 0) {
+        term.scrollLines(rows);
+        // Advance the anchor by the consumed pixels so the next move computes
+        // relative to here (avoids jumpy multi-row scrolls).
+        startY = currentY + (dy - rows * rh);
+        // preventDefault keeps the browser from also scrolling the page.
+        // Requires passive: false on the listener registration below.
+        e.preventDefault();
+      }
+    };
+
+    const onTouchEnd = () => {
+      startY = null;
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [isTerminalReady, terminalRef, xtermRef]);
 }
