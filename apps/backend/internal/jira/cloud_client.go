@@ -28,9 +28,13 @@ import (
 //   - api_token (Cloud-only): Basic auth with {email}:{token} minted at
 //     id.atlassian.com.
 //   - pat (Server-only): Personal Access Token sent as `Authorization: Bearer`.
-//   - session_cookie (both): the secret is the JWT value of
+//   - session_cookie (Cloud-only): the secret is the JWT value of
 //     `cloud.session.token` (password accounts) or `tenant.session.token`
 //     (SSO), copied from DevTools → Application → Cookies.
+//     buildSessionCookieHeader emits those two Atlassian-specific cookie
+//     names, and validateAuthInstance rejects the combo on Server/DC where
+//     the equivalent cookie is JSESSIONID — Server/DC users authenticate
+//     via PAT until a Server-aware session-cookie path is added.
 //
 // The client holds no state beyond credentials so it can be recreated cheaply
 // when config changes.
