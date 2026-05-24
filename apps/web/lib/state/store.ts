@@ -35,7 +35,6 @@ import {
   createJiraSlice,
   createLinearSlice,
   createOfficeSlice,
-  createFeaturesSlice,
   defaultKanbanState,
   defaultWorkspaceState,
   defaultSettingsState,
@@ -47,7 +46,6 @@ import {
   defaultJiraState,
   defaultLinearState,
   defaultOfficeState,
-  defaultFeaturesState,
   type WorkspaceState,
   type WorkflowsState,
   type ExecutorsState,
@@ -197,10 +195,6 @@ export type AppState = {
 
   // Office slice
   office: (typeof defaultOfficeState)["office"];
-
-  // Feature flags slice
-  features: (typeof defaultFeaturesState)["features"];
-  setFeatures: (features: (typeof defaultFeaturesState)["features"]) => void;
 
   // UI slice
   previewPanel: (typeof defaultUIState)["previewPanel"];
@@ -564,8 +558,6 @@ export function createAppStore(initialState?: Partial<AppState>) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...createOfficeSlice(set as any, get as any, api as any),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ...createFeaturesSlice(set as any, get as any, api as any),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...createUISlice(set as any, get as any, api as any),
       // Override state with merged initial state
       kanban: merged.kanban,
@@ -621,7 +613,6 @@ export function createAppStore(initialState?: Partial<AppState>) {
       jiraIssueWatches: merged.jiraIssueWatches,
       linearIssueWatches: merged.linearIssueWatches,
       office: merged.office,
-      features: merged.features,
       previewPanel: merged.previewPanel,
       rightPanel: merged.rightPanel,
       diffs: merged.diffs,

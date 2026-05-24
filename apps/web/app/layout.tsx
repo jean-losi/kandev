@@ -17,7 +17,9 @@ import { ConfigChatProvider } from "@/components/config-chat/config-chat-provide
 import { SessionFailureToastBridge } from "@/components/session-failure-toast-bridge";
 import { SidebarViewsSyncBridge } from "@/components/sidebar-views-sync-bridge";
 import { LogBufferBridge } from "@/components/log-buffer-bridge";
-import { getFeatureFlagsAction } from "@/app/actions/features";
+import { dehydrate } from "@tanstack/react-query";
+import { makeQueryClient } from "@/lib/query/client";
+import { featuresQueryOptions } from "@/lib/query/query-options/features";
 
 export const metadata: Metadata = {
   title: "Kandev - AI Kanban",
@@ -43,11 +45,14 @@ export default async function RootLayout({
   const apiPort = process.env.NEXT_PUBLIC_KANDEV_API_PORT ?? null;
   const debugMode = process.env.NEXT_PUBLIC_KANDEV_DEBUG === "true";
 
-  // SSR-fetch the deployment's feature flags so the entire client tree
-  // (including the sidebar nav and gated routes) renders with the correct
-  // visibility on the first paint. Falls back to all-off when the backend
-  // is unreachable. See docs/decisions/0007-runtime-feature-flags.md.
-  const features = await getFeatureFlagsAction();
+  // SSR-prefetch the deployment's feature flags into a per-request
+  // QueryClient so the entire client tree (sidebar nav, gated routes)
+  // renders with the correct visibility on the first paint. Falls back
+  // to all-off when the backend is unreachable. See
+  // docs/decisions/0007-runtime-feature-flags.md.
+  const ssrQueryClient = makeQueryClient();
+  await ssrQueryClient.prefetchQuery(featuresQueryOptions());
+  const dehydratedState = dehydrate(ssrQueryClient);
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -67,8 +72,8 @@ export default async function RootLayout({
             }}
           />
         ) : null}
-        <QueryProvider>
-          <StateProvider initialState={{ features }}>
+        <QueryProvider state={dehydratedState}>
+          <StateProvider initialState={{}}>
             <ThemeProvider>
               <DiffWorkerPoolProvider>
                 <TooltipProvider>

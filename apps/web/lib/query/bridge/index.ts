@@ -1,31 +1,35 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { WebSocketClient } from "@/lib/ws/client";
+import { registerFeaturesBridge } from "./features";
+import { registerCommentsBridge } from "./comments";
+import { registerWorkspaceBridge } from "./workspace";
+import { registerSettingsBridge } from "./settings";
+import { registerAutomationsBridge } from "./automations";
+import { registerIntegrationsBridge } from "./integrations";
 
 /**
  * Registers the WS → TanStack Query bridge.
  *
- * This is the single entry point called from QueryProvider on mount.
- * It returns a cleanup function that unregisters all handlers.
+ * Single entry point called from QueryProvider on mount. Returns a
+ * cleanup function that unregisters every per-domain handler.
  *
- * Current state: no-op stub — waves 1–5 will extend this by importing
- * and calling per-domain registrars, e.g.:
- *
- *   import { registerKanbanBridge } from "./kanban";
- *   import { registerSessionBridge } from "./session";
- *   // etc.
- *
- * Each per-domain module mirrors the shape of the corresponding
- * lib/ws/handlers/<domain>.ts file 1:1, but uses:
- *   queryClient.setQueryData(qk.X(...), updater)
- * instead of:
- *   store.getState().X(...)
+ * Each per-domain module mirrors lib/ws/handlers/<domain>.ts 1:1 but
+ * writes into the TQ cache (queryClient.setQueryData) instead of the
+ * Zustand store. Migration waves add their registrar to the list below.
  */
 export function registerQueryBridge(
-  _ws: WebSocketClient,
-  _queryClient: QueryClient,
+  ws: WebSocketClient,
+  queryClient: QueryClient,
 ): () => void {
-  // No-op until domain bridges are added in waves 1–5.
+  const cleanups: Array<() => void> = [
+    registerFeaturesBridge(ws, queryClient),
+    registerCommentsBridge(ws, queryClient),
+    registerWorkspaceBridge(ws, queryClient),
+    registerSettingsBridge(ws, queryClient),
+    registerAutomationsBridge(ws, queryClient),
+    registerIntegrationsBridge(ws, queryClient),
+  ];
   return () => {
-    // cleanup — unsubscribe per-domain handlers when added
+    for (const fn of cleanups) fn();
   };
 }

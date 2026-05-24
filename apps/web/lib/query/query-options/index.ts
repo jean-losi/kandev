@@ -18,4 +18,9 @@
  * share the same options object.
  */
 
+export * from "./features";
+// comments has no server fetch — see comments.ts for rationale
+export * from "./workspace";
+export * from "./settings";
 export * from "./automations";
+export * from "./integrations";
