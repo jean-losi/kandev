@@ -36,7 +36,7 @@ permissions:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Pre-baked image bundles Go, Node 24, pnpm 9.15.9 — see
     # .github/docker/ci-base/Dockerfile.
     container: ghcr.io/kdlbs/kandev-ci:latest
@@ -98,7 +98,7 @@ jobs:
   e2e:
     name: E2E Shard ${{ matrix.shard }}/10
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Pre-baked image bundles Node 24, pnpm 9.15.9, and the Playwright browser
     # binaries (Chromium etc.) — see .github/docker/ci-base/Dockerfile. This is
     # the biggest speedup since `npx playwright install chromium --with-deps`
@@ -214,7 +214,7 @@ jobs:
     # wouldn't exist on the host where the docker daemon resolves them).
     # We still avoid the slow `playwright install --with-deps` step by copying
     # browsers out of the kandev-ci image — see the extract step below.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -335,7 +335,7 @@ jobs:
     name: Merge E2E Reports
     needs: [e2e, e2e-containers]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Pre-baked image bundles Node 24, pnpm 9.15.9, and the Playwright CLI.
     container: ghcr.io/kdlbs/kandev-ci:latest
     timeout-minutes: 5
