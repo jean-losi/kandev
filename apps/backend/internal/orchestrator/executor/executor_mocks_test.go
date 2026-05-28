@@ -705,6 +705,22 @@ func (m *mockRepository) HasExecutorRunningRow(ctx context.Context, sessionID st
 	return false, nil
 }
 
+// UpdateExecutorRunningStatus mirrors the production sqlite repo: returns
+// ErrExecutorRunningNotFound when no row exists for the session. Tests that
+// exercise the "no row" warning-log path can rely on this, and tests that want
+// the status flip to land must seed m.executorsRunning[sessionID] first.
+func (m *mockRepository) UpdateExecutorRunningStatus(ctx context.Context, sessionID, status string) error {
+	if m.executorsRunning == nil {
+		return models.ErrExecutorRunningNotFound
+	}
+	row, ok := m.executorsRunning[sessionID]
+	if !ok {
+		return models.ErrExecutorRunningNotFound
+	}
+	row.Status = status
+	return nil
+}
+
 // Environment operations
 func (m *mockRepository) CreateEnvironment(ctx context.Context, environment *models.Environment) error {
 	return nil
