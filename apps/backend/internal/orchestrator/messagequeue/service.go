@@ -12,6 +12,7 @@ package messagequeue
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/kandev/kandev/internal/common/logger"
 	"go.uber.org/zap"
@@ -154,6 +155,13 @@ func (s *Service) CancelAll(ctx context.Context, sessionID string) (int, error) 
 		zap.String("session_id", sessionID),
 		zap.Int("removed", n))
 	return n, nil
+}
+
+// ListStaleByQueuedBy returns entries with the given queued_by tag whose
+// queued_at predates olderThan. Used by the orchestrator workflow-queue
+// watchdog to find orphaned workflow auto-start prompts.
+func (s *Service) ListStaleByQueuedBy(ctx context.Context, queuedBy string, olderThan time.Time) ([]QueuedMessage, error) {
+	return s.repo.ListStaleByQueuedBy(ctx, queuedBy, olderThan)
 }
 
 // GetStatus returns the full pending list and capacity info for a session.

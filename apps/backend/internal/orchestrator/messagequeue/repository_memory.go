@@ -98,6 +98,25 @@ func (r *memoryRepository) ListBySession(_ context.Context, sessionID string) ([
 	return out, nil
 }
 
+func (r *memoryRepository) ListStaleByQueuedBy(_ context.Context, queuedBy string, olderThan time.Time) ([]QueuedMessage, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []QueuedMessage
+	for _, list := range r.entries {
+		for _, m := range list {
+			if m.QueuedBy != queuedBy {
+				continue
+			}
+			if !m.QueuedAt.Before(olderThan) {
+				continue
+			}
+			out = append(out, *m)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].QueuedAt.Before(out[j].QueuedAt) })
+	return out, nil
+}
+
 func (r *memoryRepository) CountBySession(_ context.Context, sessionID string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -356,6 +356,11 @@ type Service struct {
 	// context. key: sessionID, value: capturedPrompt. Replaced every turn.
 	lastTurnPrompt sync.Map
 
+	// workflowQueueWatchdog is the periodic sweeper that recovers orphaned
+	// workflow auto-start queue entries. Nil before Start(), and remains nil
+	// when messageQueue or executor are not wired (some tests).
+	workflowQueueWatchdog *workflowQueueWatchdog
+
 	// Service state
 	mu        sync.RWMutex
 	running   bool
@@ -836,6 +841,14 @@ func (s *Service) Start(ctx context.Context) error {
 	// Subscribe to prepare events (persist result in session metadata)
 	s.subscribePrepareEvents()
 
+	// Start the workflow-queue watchdog so orphaned auto-start prompts get
+	// recovered if the inline auto-resume hook misses them. Skip when the
+	// pieces aren't wired (tests that only need a partial service).
+	if s.messageQueue != nil && s.executor != nil {
+		s.workflowQueueWatchdog = s.newWorkflowQueueWatchdog()
+		s.workflowQueueWatchdog.Start(ctx)
+	}
+
 	s.logger.Info("orchestrator service started successfully")
 	return nil
 }
@@ -863,6 +876,11 @@ func (s *Service) Stop() error {
 	if err := s.watcher.Stop(); err != nil {
 		s.logger.Error("failed to stop watcher", zap.Error(err))
 		errs = append(errs, err)
+	}
+
+	if s.workflowQueueWatchdog != nil {
+		s.workflowQueueWatchdog.Stop()
+		s.workflowQueueWatchdog = nil
 	}
 
 	s.cancelAllClarificationWatchdogs()
