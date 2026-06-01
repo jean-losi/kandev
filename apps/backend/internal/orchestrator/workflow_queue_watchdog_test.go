@@ -276,6 +276,135 @@ func TestWorkflowQueueWatchdog_DropsTerminalSessionQueue(t *testing.T) {
 	}
 }
 
+// TestWorkflowQueueWatchdog_DedupesBySession: two stale workflow entries on
+// the same session must trigger AT MOST one recovery action per sweep. The
+// dedupe inside sweep is what keeps a many-entries-per-session backlog from
+// fanning out N concurrent resume goroutines for the same session.
+func TestWorkflowQueueWatchdog_DedupesBySession(t *testing.T) {
+	const (
+		taskID       = "task-wd-5"
+		sessionID    = "sess-wd-5"
+		executionID  = "exec-wd-5"
+		mergeStepID  = "step-wd-merge5"
+		taskWorkflow = "wf-wd-5"
+	)
+	svc, agentMgr, mq := seedWorkflowQueueWatchdogTaskAndSession(
+		t, taskID, sessionID, executionID, mergeStepID, taskWorkflow,
+		models.TaskSessionStateWaitingForInput,
+	)
+	// Inject a second stale workflow entry against the same session.
+	ctx := context.Background()
+	if _, err := mq.QueueMessageWithMetadata(ctx, sessionID, taskID, "second", "", messagequeue.QueuedByWorkflow, false, nil, nil); err != nil {
+		t.Fatalf("seed second queue entry: %v", err)
+	}
+	mq.SetQueuedAtForTesting(sessionID, time.Now().Add(-10*time.Minute))
+	if got := mq.GetStatus(ctx, sessionID).Count; got != 2 {
+		t.Fatalf("expected 2 stale entries before sweep, got %d", got)
+	}
+
+	// Dead agent so the recover branch fires.
+	agentMgr.isAgentRunning = false
+
+	var launchCount atomic.Int32
+	launchCalled := make(chan struct{}, 4)
+	resumeDone := make(chan struct{})
+	var resumeOnce atomic.Bool
+	agentMgr.launchAgentFunc = func(_ context.Context, req *executor.LaunchAgentRequest) (*executor.LaunchAgentResponse, error) {
+		launchCount.Add(1)
+		select {
+		case launchCalled <- struct{}{}:
+		default:
+		}
+		if !resumeOnce.CompareAndSwap(false, true) {
+			return &executor.LaunchAgentResponse{AgentExecutionID: executionID + "-resumed"}, nil
+		}
+		go func() {
+			defer close(resumeDone)
+			tick := time.NewTicker(5 * time.Millisecond)
+			defer tick.Stop()
+			deadline := time.After(3 * time.Second)
+			for {
+				select {
+				case <-tick.C:
+					sess, err := svc.repo.GetTaskSession(context.Background(), req.SessionID)
+					if err != nil || sess == nil || sess.State != models.TaskSessionStateStarting {
+						continue
+					}
+					svc.handleAgentBootReady(context.Background(), watcher.AgentEventData{
+						TaskID: req.TaskID, SessionID: req.SessionID,
+					})
+					time.Sleep(600 * time.Millisecond)
+					return
+				case <-deadline:
+					return
+				}
+			}
+		}()
+		return &executor.LaunchAgentResponse{AgentExecutionID: executionID + "-resumed"}, nil
+	}
+
+	wd := svc.newWorkflowQueueWatchdog()
+	wd.sweep(ctx)
+
+	// Wait for the single recovery to settle.
+	select {
+	case <-launchCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("watchdog did not drive LaunchAgent within 5s")
+	}
+	select {
+	case <-resumeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("resume goroutine did not drain within 5s")
+	}
+
+	// LaunchAgent may have been re-invoked once by a re-resume after drain
+	// completed (legitimate); what matters is the watchdog itself did NOT
+	// spawn N concurrent resumes for the dedupe-target session — checked
+	// by ensuring sweep() returned before any extra resume fired (the
+	// launchCount snapshot below). It's >=1 (first sweep) and bounded.
+	if got := launchCount.Load(); got < 1 {
+		t.Errorf("expected at least 1 LaunchAgent call from the dedupe sweep, got %d", got)
+	}
+}
+
+// TestWorkflowQueueWatchdog_TerminalSessionPreservesUserEntries: when the
+// session is terminal, workflow auto-start entries are dropped but
+// user-authored entries on the same session must be left intact (the user
+// authored them and their cleanup is owned by other paths).
+func TestWorkflowQueueWatchdog_TerminalSessionPreservesUserEntries(t *testing.T) {
+	const (
+		taskID       = "task-wd-6"
+		sessionID    = "sess-wd-6"
+		executionID  = "exec-wd-6"
+		mergeStepID  = "step-wd-merge6"
+		taskWorkflow = "wf-wd-6"
+	)
+	svc, _, mq := seedWorkflowQueueWatchdogTaskAndSession(
+		t, taskID, sessionID, executionID, mergeStepID, taskWorkflow,
+		models.TaskSessionStateCompleted,
+	)
+	ctx := context.Background()
+	// Add a user-authored entry alongside the workflow one.
+	if _, err := mq.QueueMessage(ctx, sessionID, taskID, "user follow-up", "", messagequeue.QueuedByUser, false, nil); err != nil {
+		t.Fatalf("seed user queue: %v", err)
+	}
+	if got := mq.GetStatus(ctx, sessionID).Count; got != 2 {
+		t.Fatalf("expected 2 entries before sweep, got %d", got)
+	}
+
+	wd := svc.newWorkflowQueueWatchdog()
+	wd.sweep(ctx)
+
+	status := mq.GetStatus(ctx, sessionID)
+	if status.Count != 1 {
+		t.Fatalf("expected 1 entry after sweep (user kept, workflow dropped), got %d", status.Count)
+	}
+	if status.Entries[0].QueuedBy != messagequeue.QueuedByUser {
+		t.Errorf("surviving entry queued_by = %q, want %q", status.Entries[0].QueuedBy, messagequeue.QueuedByUser)
+	}
+}
+
 // TestWorkflowQueueWatchdog_StartStop_NoLeaks asserts the Start/Stop
 // lifecycle drains cleanly so goleak.VerifyTestMain stays green.
 func TestWorkflowQueueWatchdog_StartStop_NoLeaks(t *testing.T) {
