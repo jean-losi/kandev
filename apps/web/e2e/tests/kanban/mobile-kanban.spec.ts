@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test-base";
 import { MobileKanbanPage } from "../../pages/mobile-kanban-page";
+import { missingGitHealth } from "./health-fixtures";
 
 test.describe("Mobile kanban view", () => {
   test("renders mobile layout with column tabs and swipeable columns", async ({
@@ -85,6 +86,29 @@ test.describe("Mobile kanban view", () => {
     // Menu sheet should open with display options
     await expect(testPage.getByRole("heading", { name: "Menu" })).toBeVisible();
     await expect(testPage.getByText("Display Options")).toBeVisible();
+  });
+
+  test("opens missing git health issue from mobile menu", async ({ testPage, backend }) => {
+    await testPage.route(`${backend.baseUrl}/api/v1/system/health`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(missingGitHealth),
+      }),
+    );
+
+    const mobile = new MobileKanbanPage(testPage);
+    await mobile.goto();
+
+    await mobile.mobileMenuButton.click();
+    await testPage.getByRole("button", { name: "Health issues" }).click();
+
+    const dialog = testPage.getByRole("dialog", { name: "Setup Issues" });
+    await expect(dialog.getByText("Git executable is required")).toBeVisible();
+    await expect(
+      dialog.getByText("Install Git and ensure the git executable is available on PATH."),
+    ).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "View system status" })).toBeVisible();
   });
 
   test("column tabs allow switching between workflow steps", async ({
