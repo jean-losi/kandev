@@ -2,9 +2,11 @@ package utility
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -325,10 +327,101 @@ func (e *ACPInferenceExecutor) Probe(ctx context.Context, req *ProbeRequest) (*P
 			DurationMs: int(time.Since(startTime).Milliseconds()),
 		}, nil
 	}
+	if len(resp.Models) == 0 && isOpenCodeACPCommand(cfg.Command) {
+		e.applyOpenCodeModelsFallback(ctx, resp, resolvedCmd, workDir)
+	}
 
 	resp.Success = true
 	resp.DurationMs = int(time.Since(startTime).Milliseconds())
 	return resp, nil
+}
+
+// isOpenCodeACPCommand reports whether the configured ACP probe command is
+// OpenCode's ACP transport.
+func isOpenCodeACPCommand(command []string) bool {
+	return len(command) >= 2 && filepath.Base(command[0]) == "opencode" && command[1] == "acp"
+}
+
+// applyOpenCodeModelsFallback fills an otherwise empty probe model list from
+// OpenCode's CLI model listing.
+func (e *ACPInferenceExecutor) applyOpenCodeModelsFallback(ctx context.Context, resp *ProbeResponse, resolvedCmd, workDir string) {
+	models, err := probeOpenCodeModels(ctx, resolvedCmd, workDir)
+	if err != nil {
+		e.logger.Warn("ACP probe: failed to list opencode models",
+			zap.String("command", resolvedCmd),
+			zap.Error(err))
+		return
+	}
+	if len(models) == 0 {
+		e.logger.Warn("ACP probe: opencode models returned no valid model entries",
+			zap.String("command", resolvedCmd))
+		return
+	}
+	resp.Models = models
+}
+
+// probeOpenCodeModels runs the OpenCode model-listing command and converts its
+// output into probe model entries.
+func probeOpenCodeModels(ctx context.Context, resolvedCmd, workDir string) ([]ProbeModel, error) {
+	//nolint:gosec // resolvedCmd is from the same hard-coded allow-list used to launch the ACP probe.
+	cmd := exec.CommandContext(ctx, resolvedCmd, "models")
+	cmd.Dir = workDir
+	cmd.Env = environWithNoColor(os.Environ())
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, commandErrorWithStderr(err)
+	}
+	return parseOpenCodeModelsOutput(string(out)), nil
+}
+
+// environWithNoColor returns an environment that forces NO_COLOR=1, replacing
+// any caller-provided value.
+func environWithNoColor(environ []string) []string {
+	env := make([]string, 0, len(environ)+1)
+	for _, item := range environ {
+		if !strings.HasPrefix(item, "NO_COLOR=") {
+			env = append(env, item)
+		}
+	}
+	return append(env, "NO_COLOR=1")
+}
+
+// commandErrorWithStderr preserves stderr from failed commands when Go exposes
+// it through exec.ExitError.
+func commandErrorWithStderr(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		stderr := strings.TrimSpace(string(exitErr.Stderr))
+		if stderr != "" {
+			return fmt.Errorf("%w: %s", err, stderr)
+		}
+	}
+	return err
+}
+
+// parseOpenCodeModelsOutput converts newline-delimited OpenCode model IDs into
+// deduplicated probe model entries.
+func parseOpenCodeModelsOutput(output string) []ProbeModel {
+	seen := make(map[string]struct{})
+	var models []ProbeModel
+	for _, line := range strings.Split(output, "\n") {
+		id := strings.TrimSpace(line)
+		if !isOpenCodeModelID(id) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		models = append(models, ProbeModel{ID: id, Name: id})
+	}
+	return models
+}
+
+// isOpenCodeModelID accepts model-like OpenCode IDs and rejects decoration or
+// progress lines from CLI output.
+func isOpenCodeModelID(id string) bool {
+	return strings.Contains(id, "/") && !strings.ContainsAny(id, " \t\r")
 }
 
 // probeACPSession performs initialize + session/new and returns the parsed
