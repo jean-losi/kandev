@@ -114,9 +114,11 @@ test.describe("Utility Agents settings page", () => {
     // Regression guard for "I select an agent but can't select a model".
     // The mock-agent binary advertises `mock-fast` (default) and `mock-smart`
     // in its session/new response, so the boot-time ACP probe populates the
-    // host utility capability cache. The backend filters out agents whose
-    // probe didn't reach StatusOK, so in E2E (KANDEV_MOCK_AGENT=only) the
-    // Agent dropdown should show exactly one option: Mock.
+    // host utility capability cache. In E2E (KANDEV_MOCK_AGENT=only) only
+    // `mock-agent` is registered in the inference-agent registry, so the
+    // Agent dropdown shows exactly one option: Mock. (Non-OK agents are no
+    // longer filtered out — see #1269 — but in this profile no other agent
+    // is registered to begin with.)
     const pageErrors: Error[] = [];
     testPage.on("pageerror", (err) => pageErrors.push(err));
 
@@ -187,6 +189,87 @@ test.describe("Utility Agents settings page", () => {
     // Pick Mock Smart and verify the trigger reflects the selection.
     await testPage.getByRole("option", { name: /Mock Smart/ }).click();
     await expect(modelCombobox).toContainText("Mock Smart");
+
+    expect(pageErrors, `uncaught errors: ${pageErrors.map((e) => e.message).join("; ")}`).toEqual(
+      [],
+    );
+  });
+
+  test("non-ok agent renders status note + Refresh re-probes", async ({ testPage }) => {
+    // Regression guard for "claude shown in picker but no models, with no
+    // explanation". The backend now surfaces probe status so the UI can
+    // render an inline note + Refresh button instead of a silently-empty
+    // Model picker. Stub both endpoints to drive the state machine.
+    const pageErrors: Error[] = [];
+    testPage.on("pageerror", (err) => pageErrors.push(err));
+
+    let refreshCount = 0;
+    await testPage.route("**/api/v1/utility/inference-agents", (route) => {
+      if (route.request().method() !== "GET") {
+        return route.fallback();
+      }
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          agents: [
+            {
+              id: "stub-acp",
+              name: "Stub ACP Agent",
+              display_name: "Stub",
+              status: refreshCount === 0 ? "auth_required" : "ok",
+              status_message: refreshCount === 0 ? "please run `stub login`" : "",
+              models:
+                refreshCount === 0
+                  ? []
+                  : [{ id: "stub-fast", name: "Stub Fast", description: "", is_default: true }],
+            },
+          ],
+        }),
+      });
+    });
+
+    await testPage.route("**/api/v1/utility/inference-agents/stub-acp/refresh", (route) => {
+      refreshCount += 1;
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "stub-acp",
+          name: "Stub ACP Agent",
+          display_name: "Stub",
+          status: "ok",
+          models: [{ id: "stub-fast", name: "Stub Fast", description: "", is_default: true }],
+        }),
+      });
+    });
+
+    await testPage.goto("/settings/utility-agents");
+    await expect(
+      testPage.getByRole("heading", { name: "Utility Agents", exact: true }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Pick Stub from the Agent dropdown so the Default Model row binds
+    // selectedAgent to the auth_required entry.
+    const agentSelect = testPage
+      .locator('div:has(> label:text-is("Agent"))')
+      .first()
+      .getByRole("combobox");
+    await agentSelect.click();
+    await testPage.getByRole("option", { name: "Stub", exact: true }).click();
+
+    // Auth_required status copy renders, Refresh visible.
+    const note = testPage.getByTestId("inference-agent-status-note").first();
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("Sign in to Stub");
+
+    const refresh = testPage.getByTestId("inference-agent-refresh").first();
+    await expect(refresh).toBeVisible();
+    await refresh.click();
+
+    // After Refresh, status note disappears (status:"ok" + 1 model).
+    await expect(testPage.getByTestId("inference-agent-status-note").first()).not.toBeVisible();
+    expect(refreshCount).toBe(1);
 
     expect(pageErrors, `uncaught errors: ${pageErrors.map((e) => e.message).join("; ")}`).toEqual(
       [],
