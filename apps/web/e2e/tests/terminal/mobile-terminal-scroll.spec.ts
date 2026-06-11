@@ -9,6 +9,11 @@ import { test } from "../../fixtures/test-base";
 import type { SeedData } from "../../fixtures/test-base";
 import type { ApiClient } from "../../helpers/api-client";
 import { SessionPage } from "../../pages/session-page";
+import {
+  readTerminalBuffer,
+  switchToTerminalPanel,
+  waitForShellReady,
+} from "./mobile-terminal-helpers";
 
 async function seedTaskWithSession(
   testPage: Page,
@@ -32,29 +37,6 @@ async function seedTaskWithSession(
   await session.waitForLoad();
   await session.waitForChatIdle();
   return session;
-}
-
-async function switchToTerminalPanel(testPage: Page): Promise<void> {
-  await testPage.getByRole("button", { name: "Terminal" }).tap();
-}
-
-async function waitForShellReady(testPage: Page, timeout = 45_000): Promise<void> {
-  await expect
-    .poll(() => readTerminalBuffer(testPage).then((b) => b.length > 0), {
-      timeout,
-      message: "Waiting for mobile terminal shell to connect",
-    })
-    .toBe(true);
-}
-
-async function readTerminalBuffer(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const panel = document.querySelector('[data-testid="terminal-panel"]');
-    const xtermEl = panel?.querySelector(".xterm");
-    type XC = HTMLElement & { __xtermReadBuffer?: () => string };
-    const container = xtermEl?.parentElement as XC | null | undefined;
-    return container?.__xtermReadBuffer?.() ?? "";
-  });
 }
 
 async function readViewportY(page: Page): Promise<number> {

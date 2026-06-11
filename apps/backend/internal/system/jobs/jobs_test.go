@@ -22,12 +22,24 @@ func newTestLogger() *logger.Logger {
 type stubBus struct {
 	mu     sync.Mutex
 	events []*bus.Event
+	notify chan struct{}
+}
+
+// newStubBus returns a stubBus with a buffered notify channel so Publish can
+// signal waiters without blocking. The buffer is size 1 because waiters always
+// re-check the event count after each wake, so a coalesced signal is enough.
+func newStubBus() *stubBus {
+	return &stubBus{notify: make(chan struct{}, 1)}
 }
 
 func (s *stubBus) Publish(_ context.Context, _ string, event *bus.Event) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.events = append(s.events, event)
+	s.mu.Unlock()
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -71,8 +83,33 @@ func waitForState(t *testing.T, tracker *Tracker, id string, target State) *Job 
 	return nil
 }
 
+// waitForEvents blocks until at least n events have been published or the
+// timeout fires. The terminal lifecycle event is published after the
+// transition releases the lock (see Tracker.transition), so observing the
+// terminal state via waitForState does not guarantee the terminal event has
+// landed yet - assertions on the event log must sync on the published count,
+// not the job state. It selects on the bus notify channel rather than polling
+// so the wait is deterministic (no time.Sleep).
+func waitForEvents(t *testing.T, stub *stubBus, n int) {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		if len(stub.snapshot()) >= n {
+			return
+		}
+		select {
+		case <-stub.notify:
+		case <-timeout:
+			if got := len(stub.snapshot()); got < n {
+				t.Fatalf("expected at least %d published events within 2s, got %d", n, got)
+			}
+			return
+		}
+	}
+}
+
 func TestStart_PublishesQueuedRunningSucceeded(t *testing.T) {
-	stub := &stubBus{}
+	stub := newStubBus()
 	tracker := NewTracker(stub, newTestLogger())
 
 	id := tracker.Start(context.Background(), "vacuum", func(context.Context) (map[string]interface{}, error) {
@@ -84,6 +121,7 @@ func TestStart_PublishesQueuedRunningSucceeded(t *testing.T) {
 		t.Errorf("expected reclaimed_bytes in result, got %+v", job.Result)
 	}
 
+	waitForEvents(t, stub, 3)
 	events := stub.snapshot()
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 published events (queued/running/succeeded), got %d", len(events))
@@ -105,7 +143,7 @@ func TestStart_PublishesQueuedRunningSucceeded(t *testing.T) {
 }
 
 func TestStart_PublishesFailed(t *testing.T) {
-	stub := &stubBus{}
+	stub := newStubBus()
 	tracker := NewTracker(stub, newTestLogger())
 
 	id := tracker.Start(context.Background(), "vacuum", func(context.Context) (map[string]interface{}, error) {
@@ -120,6 +158,7 @@ func TestStart_PublishesFailed(t *testing.T) {
 		t.Error("expected EndedAt to be set on failed job")
 	}
 
+	waitForEvents(t, stub, 3)
 	events := stub.snapshot()
 	if len(events) < 3 {
 		t.Fatalf("expected at least 3 events, got %d", len(events))
@@ -131,14 +170,14 @@ func TestStart_PublishesFailed(t *testing.T) {
 }
 
 func TestGet_UnknownReturnsNil(t *testing.T) {
-	tracker := NewTracker(&stubBus{}, newTestLogger())
+	tracker := NewTracker(newStubBus(), newTestLogger())
 	if got := tracker.Get("nonexistent"); got != nil {
 		t.Errorf("expected nil for unknown id, got %+v", got)
 	}
 }
 
 func TestList_ReturnsAllTrackedJobs(t *testing.T) {
-	tracker := NewTracker(&stubBus{}, newTestLogger())
+	tracker := NewTracker(newStubBus(), newTestLogger())
 	ids := make([]string, 0, 3)
 	for i := 0; i < 3; i++ {
 		ids = append(ids, tracker.Start(context.Background(), "noop", func(context.Context) (map[string]interface{}, error) {

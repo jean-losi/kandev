@@ -91,7 +91,7 @@ test.describe("Workflow automation", () => {
     });
 
     // Session transitions to idle after agent completes
-    await expect(session.idleInput()).toBeVisible({ timeout: 15_000 });
+    await session.waitForChatIdle({ timeout: 15_000 });
 
     // Sidebar shows the task under "Turn Finished" section
     await expect(session.sidebarSection("Turn Finished")).toBeVisible();
@@ -217,9 +217,7 @@ test.describe("Workflow automation", () => {
     await session.sendMessage("/e2e:simple-message");
 
     // Wait for the agent to respond (second "simple mock response")
-    await expect(
-      session.chat.getByText("simple mock response", { exact: false }).nth(1),
-    ).toBeVisible({ timeout: 30_000 });
+    await session.expectChatResponseVisible("simple mock response", 1, { timeout: 30_000 });
 
     // Stepper still shows Review (no on_turn_complete events on Review)
     await expect(session.stepperStep("Review")).toHaveAttribute("aria-current", "step", {
@@ -442,7 +440,7 @@ test.describe("Workflow automation", () => {
 
     // Session transitions to idle after the cascade completes.
     // The cascade runs 4 sequential agent turns; session state may lag message display.
-    await expect(session.idleInput()).toBeVisible({ timeout: 30_000 });
+    await session.waitForChatIdle({ timeout: 30_000 });
 
     // Sidebar shows the task under "Turn Finished" section
     await expect(session.sidebarSection("Turn Finished")).toBeVisible();
@@ -603,7 +601,7 @@ test.describe("Workflow automation", () => {
     await session.waitForLoad();
 
     // Wait for the idle input (chat is ready)
-    await expect(session.idleInput()).toBeVisible({ timeout: 15_000 });
+    await session.waitForChatIdle({ timeout: 15_000 });
 
     // The backend downgraded auto-start to prepare: session exists but agent
     // was NOT started. Verify session was created in CREATED state.

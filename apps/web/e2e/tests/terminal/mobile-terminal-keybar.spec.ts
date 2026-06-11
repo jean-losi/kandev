@@ -12,6 +12,7 @@ import type { ApiClient } from "../../helpers/api-client";
 import { SessionPage } from "../../pages/session-page";
 import { MobileTerminalKeybarPage } from "../../pages/mobile-terminal-keybar-page";
 import { attachShellInputCapture, type ShellInputFrame } from "../../helpers/ws-capture";
+import { switchToTerminalPanel, waitForShellReady } from "./mobile-terminal-helpers";
 
 async function seedTaskWithSession(
   testPage: Page,
@@ -35,24 +36,6 @@ async function seedTaskWithSession(
   await session.waitForLoad();
   await session.waitForChatIdle();
   return session;
-}
-
-async function switchToTerminalPanel(testPage: Page): Promise<void> {
-  await testPage.getByRole("button", { name: "Terminal" }).tap();
-}
-
-/**
- * Wait for the mobile shell to be ready by tailing xterm's buffer until it has
- * any content (a prompt is enough). Mobile mounts the terminal lazily on tab
- * switch so this can take longer than desktop.
- */
-async function waitForShellReady(testPage: Page, timeout = 45_000): Promise<void> {
-  await expect
-    .poll(() => readTerminalBuffer(testPage).then((b) => b.length > 0), {
-      timeout,
-      message: "Waiting for mobile terminal shell to connect",
-    })
-    .toBe(true);
 }
 
 /**
@@ -104,16 +87,6 @@ async function expectFrame(
       message: `Expected shell.input frame with data ${JSON.stringify(data)}`,
     })
     .toBeTruthy();
-}
-
-async function readTerminalBuffer(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const panel = document.querySelector('[data-testid="terminal-panel"]');
-    const xtermEl = panel?.querySelector(".xterm");
-    type XC = HTMLElement & { __xtermReadBuffer?: () => string };
-    const container = xtermEl?.parentElement as XC | null | undefined;
-    return container?.__xtermReadBuffer?.() ?? "";
-  });
 }
 
 async function inlineStyleProp(loc: Locator, prop: "top" | "bottom"): Promise<string> {
