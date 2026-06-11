@@ -485,7 +485,10 @@ func (m *Manager) launchBuildExecutorRequest(ctx context.Context, executionID st
 		return nil, nil, nil, fmt.Errorf("no runtime configured: %w", err)
 	}
 
-	env := m.buildEnvForExecution(ctx, executionID, reqWithWorktree, agentConfig, profileInfo)
+	env, err := m.buildEnvForExecution(ctx, executionID, reqWithWorktree, agentConfig, profileInfo)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build launch environment: %w", err)
+	}
 
 	acpMcpServers, err := m.resolveMcpServersWithParams(ctx, reqWithWorktree.AgentProfileID, reqWithWorktree.Metadata, agentConfig)
 	if err != nil {
@@ -1120,12 +1123,13 @@ func getAttachmentsFromMetadata(execution *AgentExecution) []MessageAttachment {
 
 // configureAndStartAgent configures the agent command and starts the agent subprocess.
 // Returns the effective boot command (full command with adapter args, or base command).
-func (m *Manager) configureAndStartAgent(ctx context.Context, execution *AgentExecution, taskDescription, approvalPolicy string) (string, error) {
+func (m *Manager) configureAndStartAgent(ctx context.Context, execution *AgentExecution, approvalPolicy string) (string, error) {
 	env := runtimeEnvFromMetadata(execution.Metadata)
-	if taskDescription != "" {
-		env["TASK_DESCRIPTION"] = taskDescription
-	}
 	m.mergeAgentProfileEnvForExecution(ctx, execution, env)
+	if err := spillLargeWakePayloadEnv(env, execution.WorkspacePath, m.logger.Zap()); err != nil {
+		m.updateExecutionError(execution.ID, "failed to prepare agent env: "+err.Error())
+		return "", fmt.Errorf("failed to prepare agent env: %w", err)
+	}
 
 	if err := execution.agentctl.ConfigureAgent(ctx, execution.AgentCommand, env, approvalPolicy, execution.ContinueCommand); err != nil {
 		return "", fmt.Errorf("failed to configure agent: %w", err)
