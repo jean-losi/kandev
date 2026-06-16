@@ -204,7 +204,6 @@ func (h *MessageHandlers) wsAddMessage(ctx context.Context, msg *ws.Message) (*w
 	if wsErr != nil {
 		return wsErr, nil
 	}
-	isCreatedSession := sessionResp.Session.State == models.TaskSessionStateCreated
 
 	// Transition task from REVIEW → IN_PROGRESS if needed
 	if err := h.ensureTaskInProgress(ctx, req.TaskID); err != nil {
@@ -226,7 +225,21 @@ func (h *MessageHandlers) wsAddMessage(ctx context.Context, msg *ws.Message) (*w
 				zap.String("session_id", req.TaskSessionID),
 				zap.Error(err))
 		}
+		var err error
+		sessionResp, err = h.resolveSessionAfterTurnStart(ctx, req.TaskID, req.TaskSessionID, sessionResp)
+		if err != nil {
+			h.logger.Warn("failed to resolve prompt session after on_turn_start",
+				zap.String("task_id", req.TaskID),
+				zap.String("session_id", req.TaskSessionID),
+				zap.Error(err))
+			return ws.NewError(msg.ID, msg.Action, ws.ErrorCodeInternalError, "Failed to resolve prompt session", nil)
+		}
+		req.TaskSessionID = sessionResp.Session.ID
 	}
+	if wsErr := h.errorForBlockedMessageSession(msg, sessionResp.Session.State); wsErr != nil {
+		return wsErr, nil
+	}
+	isCreatedSession := sessionResp.Session.State == models.TaskSessionStateCreated
 
 	// Build metadata with attachments, plan mode, review comments, and context files
 	meta := orchestrator.NewUserMessageMeta().
@@ -286,6 +299,54 @@ func (h *MessageHandlers) wsAddMessage(ctx context.Context, msg *ws.Message) (*w
 	return response, nil
 }
 
+func (h *MessageHandlers) resolveSessionAfterTurnStart(
+	ctx context.Context,
+	taskID, submittedSessionID string,
+	current *dto.GetTaskSessionResponse,
+) (*dto.GetTaskSessionResponse, error) {
+	if current.Session.ID == "" {
+		return nil, errors.New("submitted session response missing session id")
+	}
+	reloaded, err := h.service.GetTaskSession(ctx, submittedSessionID)
+	if err != nil {
+		h.logger.Warn("failed to reload session after on_turn_start",
+			zap.String("task_id", taskID),
+			zap.String("session_id", submittedSessionID),
+			zap.Error(err))
+		return nil, errors.New("failed to reload submitted session after on_turn_start")
+	}
+	if reloaded.State != models.TaskSessionStateCompleted {
+		return &dto.GetTaskSessionResponse{Session: dto.FromTaskSession(reloaded)}, nil
+	}
+	primary, err := h.service.GetPrimarySession(ctx, taskID)
+	if err != nil || primary == nil {
+		if err != nil {
+			h.logger.Warn("failed to load primary session after on_turn_start switch",
+				zap.String("task_id", taskID),
+				zap.String("session_id", submittedSessionID),
+				zap.Error(err))
+		}
+		return nil, errors.New("submitted session completed during on_turn_start without replacement primary session")
+	}
+	if primary.ID == submittedSessionID {
+		return nil, errors.New("submitted session completed during on_turn_start but remains primary")
+	}
+	return &dto.GetTaskSessionResponse{Session: dto.FromTaskSession(primary)}, nil
+}
+
+func (h *MessageHandlers) errorForBlockedMessageSession(msg *ws.Message, state models.TaskSessionState) *ws.Message {
+	switch state {
+	case models.TaskSessionStateRunning:
+		wsErr, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeValidation, "Agent is currently processing. Please wait for the current operation to complete.", nil)
+		return wsErr
+	case models.TaskSessionStateFailed, models.TaskSessionStateCancelled, models.TaskSessionStateCompleted:
+		wsErr, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeValidation, "Session has ended. Please create a new session to continue.", nil)
+		return wsErr
+	default:
+		return nil
+	}
+}
+
 // validateAddMessageRequest returns a non-empty error string if the request is invalid.
 func validateAddMessageRequest(req wsAddMessageRequest) string {
 	if req.TaskSessionID == "" {
@@ -315,18 +376,19 @@ func (h *MessageHandlers) checkSessionStateForMessage(ctx context.Context, msg *
 	}
 	sessionDTO := dto.FromTaskSession(session)
 	resp := &dto.GetTaskSessionResponse{Session: sessionDTO}
-	switch sessionDTO.State {
-	case models.TaskSessionStateRunning:
-		h.logger.Warn("rejected message submission while agent is busy",
-			zap.String("session_id", sessionID),
-			zap.String("session_state", string(sessionDTO.State)))
-		wsErr, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeValidation, "Agent is currently processing. Please wait for the current operation to complete.", nil)
-		return nil, wsErr
-	case models.TaskSessionStateFailed, models.TaskSessionStateCancelled:
-		wsErr, _ := ws.NewError(msg.ID, msg.Action, ws.ErrorCodeValidation, "Session has ended. Please create a new session to continue.", nil)
+	if wsErr := h.errorForBlockedMessageSession(msg, sessionDTO.State); wsErr != nil {
+		if sessionDTO.State == models.TaskSessionStateRunning {
+			h.logBlockedRunningSession(sessionID, sessionDTO.State)
+		}
 		return nil, wsErr
 	}
 	return resp, nil
+}
+
+func (h *MessageHandlers) logBlockedRunningSession(sessionID string, state models.TaskSessionState) {
+	h.logger.Warn("rejected message submission while agent is busy",
+		zap.String("session_id", sessionID),
+		zap.String("session_state", string(state)))
 }
 
 // ensureTaskInProgress fetches the task and transitions it from REVIEW → IN_PROGRESS if needed.
