@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback } from "react";
 import { Button } from "@kandev/ui/button";
 import { IconAlertCircle, IconX } from "@tabler/icons-react";
 import { GridSpinner } from "@/components/grid-spinner";
@@ -10,7 +10,7 @@ import { MessageRenderer } from "@/components/task/chat/message-renderer";
 import { TurnGroupMessage } from "@/components/task/chat/messages/turn-group-message";
 import { PrepareProgress } from "@/components/session/prepare-progress";
 import { useAppStore } from "@/components/state-provider";
-import { lastAgentErrorDismissKey, readLastAgentError } from "@/lib/session-last-agent-error";
+import { lastAgentErrorStamp, readLastAgentError } from "@/lib/session-last-agent-error";
 
 export type MessageListProps = {
   items: RenderItem[];
@@ -45,25 +45,27 @@ export function getLastTurnGroupId(items: RenderItem[]) {
   return null;
 }
 
+// The chat banner stays visible until the user explicitly dismisses it, even
+// after the agent resumes — so the user can read the full error message at
+// their own pace. The sidebar icon, by contrast, also auto-hides once the
+// agent posts a new message (see agentErrorMessageForTask).
 export function LastAgentErrorNotice({ sessionId }: { sessionId: string | null }) {
   const metadata = useAppStore((state) =>
     sessionId ? state.taskSessions.items[sessionId]?.metadata : null,
   );
   const error = readLastAgentError(metadata);
-  const dismissKey = sessionId && error ? lastAgentErrorDismissKey(sessionId, error) : "";
-  const [dismissedKey, setDismissedKey] = useState<string | null>(() =>
-    dismissKey && globalThis.localStorage?.getItem(dismissKey) === "true" ? dismissKey : null,
+  const stamp = error ? lastAgentErrorStamp(error) : "";
+  const dismissedStamp = useAppStore((state) =>
+    sessionId ? state.dismissedAgentErrors[sessionId] : undefined,
   );
-  const isDismissed =
-    dismissedKey === dismissKey || globalThis.localStorage?.getItem(dismissKey) === "true";
+  const dismissAgentError = useAppStore((state) => state.dismissAgentError);
 
   const dismiss = useCallback(() => {
-    if (!dismissKey) return;
-    globalThis.localStorage?.setItem(dismissKey, "true");
-    setDismissedKey(dismissKey);
-  }, [dismissKey]);
+    if (!sessionId || !stamp) return;
+    dismissAgentError(sessionId, stamp);
+  }, [dismissAgentError, sessionId, stamp]);
 
-  if (!error || isDismissed) return null;
+  if (!error || dismissedStamp === stamp) return null;
 
   return (
     <div

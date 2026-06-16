@@ -3,7 +3,6 @@ import { waitForSessionDone } from "../../helpers/session";
 import { SessionPage } from "../../pages/session-page";
 
 const ERROR_MESSAGE = "peer disconnected before response";
-const ERROR_OCCURRED_AT = "2026-06-14T14:06:40Z";
 
 test.describe("Task agent error indicator", () => {
   test("shows the last recoverable agent error in the sidebar and chat", async ({
@@ -12,6 +11,10 @@ test.describe("Task agent error indicator", () => {
     seedData,
   }) => {
     const taskTitle = `Recoverable Agent Error ${Date.now()}`;
+    // Stamp the error in the future so the seeded agent messages from
+    // /e2e:simple-message (created_at = now) are NOT considered "after" the
+    // error — otherwise the sidebar icon auto-hides before we can assert it.
+    const ERROR_OCCURRED_AT = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const task = await apiClient.createTaskWithAgent(
       seedData.workspaceId,
       taskTitle,
@@ -61,10 +64,13 @@ test.describe("Task agent error indicator", () => {
     await expect(notice).toContainText("Previous agent error");
     await expect(notice).toContainText(ERROR_MESSAGE);
 
-    await notice.getByRole("button", { name: "Hide previous agent error" }).click();
-    await expect(notice).toBeHidden();
-
     await errorIcon.hover();
     await expect(testPage.getByRole("tooltip")).toContainText(ERROR_MESSAGE);
+
+    // Dismissing the chat notice should also clear the sidebar icon. Both
+    // surfaces share the dismissal state through the UI store.
+    await notice.getByRole("button", { name: "Hide previous agent error" }).click();
+    await expect(notice).toBeHidden();
+    await expect(errorIcon).toBeHidden();
   });
 });
