@@ -10,13 +10,14 @@ import {
 import { APP_SIDEBAR_EXPANDED_WIDTH } from "@/components/app-sidebar/app-sidebar-constants";
 import type { AppSidebarState, UISlice } from "./types";
 
-/** Tasks expanded by default; other sections collapsed. Mirrors the
- *  "open question / risks" note in the spec: keep the unified sidebar from
- *  defaulting too tall on first open. */
+/** Keep primary navigation and entity groups open by default so first-time
+ *  Office users can see projects, agents, and workspace tools immediately. */
 export const DEFAULT_SECTION_EXPANDED: Record<string, boolean> = {
   tasks: true,
-  projects: false,
-  agents: false,
+  "office-work": true,
+  "office-workspace": true,
+  projects: true,
+  agents: true,
   integrations: false,
   settings: false,
 };
@@ -47,9 +48,9 @@ export function buildAppSidebarActions(set: ImmerSet) {
         draft.appSidebar.collapsed = collapsed;
         setStoredAppSidebarCollapsed(collapsed);
       }),
-    toggleAppSidebarSection: (sectionId: string) =>
+    toggleAppSidebarSection: (sectionId: string, defaultExpanded = false) =>
       set((draft) => {
-        const current = draft.appSidebar.sectionExpanded[sectionId] ?? false;
+        const current = draft.appSidebar.sectionExpanded[sectionId] ?? defaultExpanded;
         draft.appSidebar.sectionExpanded[sectionId] = !current;
         setStoredAppSidebarSectionExpanded({ ...draft.appSidebar.sectionExpanded });
       }),

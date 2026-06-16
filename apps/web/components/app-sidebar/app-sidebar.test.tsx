@@ -5,6 +5,9 @@ import { APP_SIDEBAR_EXPANDED_WIDTH } from "./app-sidebar-constants";
 const navigationMock = vi.hoisted(() => ({
   pathname: "/",
 }));
+const officeRouteMock = vi.hoisted(() => ({
+  inOffice: false,
+}));
 
 // The AppSidebar pulls in a lot of children that touch the dockview / kanban
 // data layer. For unit testing the collapse + section toggle behaviour we stub
@@ -48,6 +51,11 @@ vi.mock("./sections/agents-section", () => ({
 vi.mock("./sections/integrations-section", () => ({
   IntegrationsSection: () => <div data-testid="integrations-section" />,
 }));
+vi.mock("./sections/office-navigation-section", () => ({
+  OfficeNavigationSection: ({ section }: { section?: "all" | "work" | "office" }) => (
+    <div data-testid={`office-navigation-section-${section ?? "all"}`} />
+  ),
+}));
 vi.mock("./app-sidebar-footer", () => ({
   AppSidebarFooter: () => <div data-testid="footer" />,
 }));
@@ -59,11 +67,17 @@ vi.mock("next/navigation", () => ({
   usePathname: () => navigationMock.pathname,
 }));
 
+vi.mock("@/hooks/use-in-office", () => ({
+  useInOffice: () => officeRouteMock.inOffice,
+}));
+
 const storeState = {
   appSidebar: {
     collapsed: false,
     sectionExpanded: {
       tasks: true,
+      "office-work": true,
+      "office-workspace": true,
       projects: false,
       agents: false,
       integrations: false,
@@ -88,6 +102,7 @@ import { AppSidebar } from "./app-sidebar";
 describe("AppSidebar", () => {
   beforeEach(() => {
     navigationMock.pathname = "/";
+    officeRouteMock.inOffice = false;
     storeState.appSidebar.collapsed = false;
     storeState.appSidebar.settingsMode = false;
     storeState.toggleAppSidebar = vi.fn();
@@ -106,6 +121,38 @@ describe("AppSidebar", () => {
     expect(screen.getByTestId("projects-section")).toBeTruthy();
     expect(screen.getByTestId("agents-section")).toBeTruthy();
     expect(screen.queryByTestId("settings-section")).toBeNull();
+  });
+
+  it("renders office navigation without kanban-only sections in office mode", () => {
+    officeRouteMock.inOffice = true;
+    navigationMock.pathname = "/office";
+
+    render(<AppSidebar />);
+
+    expect(screen.getByTestId("office-navigation-section-work")).toBeTruthy();
+    expect(screen.getByTestId("office-navigation-section-office")).toBeTruthy();
+    expect(screen.queryByTestId("tasks-section")).toBeNull();
+    expect(screen.queryByTestId("integrations-section")).toBeNull();
+  });
+
+  it("orders office navigation sections around entity groups", () => {
+    officeRouteMock.inOffice = true;
+    navigationMock.pathname = "/office";
+
+    render(<AppSidebar />);
+
+    const nav = screen.getByRole("navigation");
+    expect(
+      Array.from(nav.querySelectorAll("[data-testid]")).map((node) =>
+        node.getAttribute("data-testid"),
+      ),
+    ).toEqual([
+      "primary-nav",
+      "office-navigation-section-work",
+      "projects-section",
+      "agents-section",
+      "office-navigation-section-office",
+    ]);
   });
 
   it("renders collapsed when store reports collapsed=true", () => {
