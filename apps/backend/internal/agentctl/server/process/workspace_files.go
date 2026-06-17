@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kandev/kandev/internal/agentctl/types"
+	"github.com/kandev/kandev/internal/common/readselector"
 	"github.com/kandev/kandev/internal/common/subproc"
 	"go.uber.org/zap"
 )
@@ -279,6 +280,37 @@ func resolveNonExistentPath(path string) (string, error) {
 // If the file is not valid UTF-8, it is base64-encoded and isBinary is true.
 // If the file is a symlink, resolvedPath contains the target path relative to the workspace root.
 func (wt *WorkspaceTracker) GetFileContent(reqPath string) (string, int64, bool, string, error) {
+	// Try the path exactly as requested first, so a real workspace file whose
+	// name contains a colon (e.g. "notes.txt:2-3") or a literal "~" path
+	// segment still opens. Only if the literal open fails do we treat a
+	// trailing piece as an omp read selector (e.g. "foo.go:43-94", multi-range)
+	// and/or a "~"-home shorthand, strip/expand it, and retry — so agent links
+	// that embed a selector open without breaking valid filenames.
+	content, size, isBinary, resolved, err := wt.readResolvedPath(reqPath)
+	if err == nil {
+		return content, size, isBinary, resolved, nil
+	}
+	if alt := expandHomePath(stripReadSelector(reqPath)); alt != reqPath {
+		if c, s, b, r, altErr := wt.readResolvedPath(alt); altErr == nil {
+			return c, s, b, r, nil
+		}
+	}
+	// Neither the literal path nor the stripped/expanded fallback opened;
+	// surface the original (literal-path) error, which is the most meaningful.
+	return content, size, isBinary, resolved, err
+}
+
+// stripReadSelector removes a trailing omp read selector from reqPath (the line
+// range itself is irrelevant to serving content); paths without a selector are
+// returned unchanged.
+func stripReadSelector(reqPath string) string {
+	clean, _, _ := readselector.Split(reqPath)
+	return clean
+}
+
+// readResolvedPath resolves reqPath within the workspace, falling back to the
+// read-only external-absolute-path path (ADR 0016), and returns its content.
+func (wt *WorkspaceTracker) readResolvedPath(reqPath string) (string, int64, bool, string, error) {
 	safePath, err := wt.resolveSafePath(reqPath)
 	if err != nil {
 		if errors.Is(err, errPathTraversal) {
@@ -297,6 +329,24 @@ func (wt *WorkspaceTracker) GetFileContent(reqPath string) (string, int64, bool,
 
 	content, size, isBinary, err := readFileContent(safePath)
 	return content, size, isBinary, resolvedPath, err
+}
+
+// expandHomePath expands a leading "~" or "~/" to the current user's home
+// directory. omp emits read paths like "~/.kandev/…"; a literal tilde is not a
+// real filesystem path, so it must be expanded before stat/serve. Other paths
+// (absolute, workspace-relative) are returned unchanged.
+func expandHomePath(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
 
 func readFileContent(safePath string) (string, int64, bool, error) {

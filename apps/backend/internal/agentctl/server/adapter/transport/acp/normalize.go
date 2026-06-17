@@ -6,6 +6,7 @@ import (
 
 	"github.com/kandev/kandev/internal/agentctl/server/adapter/transport/shared"
 	"github.com/kandev/kandev/internal/agentctl/types/streams"
+	"github.com/kandev/kandev/internal/common/readselector"
 )
 
 // Tool operation type constants.
@@ -313,9 +314,24 @@ func updateModifyFileInput(mf *streams.ModifyFilePayload, supplemental, inputMap
 	}
 }
 
+// updateReadFileInput fills a ReadFile payload from a tool_call_update: it sets
+// FilePath (when still empty) to the selector-stripped path and populates
+// Offset/Limit from the parsed line range when those fields are unset.
 func updateReadFileInput(rf *streams.ReadFilePayload, supplemental, inputMap map[string]any) {
-	if path := pathFromArgs(supplemental, inputMap); path != "" && rf.FilePath == "" {
-		rf.FilePath = path
+	// Parse the selector on every update — a later tool_call_update can carry the
+	// line range (e.g. "main.go:50+150") even when an earlier frame already set
+	// FilePath, so range metadata must not be gated on FilePath being empty.
+	if path := pathFromArgs(supplemental, inputMap); path != "" {
+		clean, startLine, lineCount := readselector.Split(path)
+		if rf.FilePath == "" {
+			rf.FilePath = clean
+		}
+		if rf.Offset == 0 {
+			rf.Offset = startLine
+		}
+		if rf.Limit == 0 {
+			rf.Limit = lineCount
+		}
 	}
 }
 
@@ -383,13 +399,11 @@ func (n *Normalizer) normalizeEdit(args map[string]any) *streams.NormalizedPaylo
 			Type: streams.MutationPatch,
 		}
 
-		// Add line numbers if available
-		if startLine, ok := rawInput["old_str_start_line_number_1"].(float64); ok {
-			mutation.StartLine = int(startLine)
-		}
-		if endLine, ok := rawInput["old_str_end_line_number_1"].(float64); ok {
-			mutation.EndLine = int(endLine)
-		}
+		// Line numbers vary by agent: Claude's str-replace editor uses
+		// old_str_*_line_number_1, OMP uses startLine/endLine. Accept both
+		// (plus snake_case) so edit links can navigate to the changed lines.
+		mutation.StartLine = firstInt(rawInput, "old_str_start_line_number_1", "startLine", "start_line")
+		mutation.EndLine = firstInt(rawInput, "old_str_end_line_number_1", "endLine", "end_line")
 
 		// Generate unified diff when at least one string is provided
 		if oldStr != "" || newStr != "" {
@@ -403,6 +417,18 @@ func (n *Normalizer) normalizeEdit(args map[string]any) *streams.NormalizedPaylo
 	return streams.NewModifyFile(path, mutations)
 }
 
+// firstInt returns the first key whose value is a non-zero int, handling JSON
+// numbers (decoded as float64). Line/column numbers are 1-based, so a missing
+// or zero value is treated as absent.
+func firstInt(m map[string]any, keys ...string) int {
+	for _, k := range keys {
+		if v := shared.GetInt(m, k); v != 0 {
+			return v
+		}
+	}
+	return 0
+}
+
 // normalizeRead converts ACP read tool data.
 // If rawInput.type is "directory", this becomes a code search (file listing) operation.
 func (n *Normalizer) normalizeRead(args map[string]any) *streams.NormalizedPayload {
@@ -412,13 +438,17 @@ func (n *Normalizer) normalizeRead(args map[string]any) *streams.NormalizedPaylo
 	}
 
 	path := pathFromArgs(args, rawInput)
+	// OMP's read tool embeds a line/range/mode selector in the path
+	// (e.g. "foo.go:43-94"); strip it so the file link stays openable and
+	// carry the parsed range via offset/limit. No-op for other agents.
+	path, startLine, lineCount := readselector.Split(path)
 
 	// Check if this is a directory read - treat as code search (file listing)
 	if readType := shared.GetString(rawInput, "type"); readType == readTypeDirectory {
 		return streams.NewCodeSearch("", "", path, "")
 	}
 
-	return streams.NewReadFile(path, 0, 0)
+	return streams.NewReadFile(path, startLine, lineCount)
 }
 
 // normalizeExecute converts ACP execute/bash tool data.

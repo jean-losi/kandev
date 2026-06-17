@@ -1,12 +1,13 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useCallback } from "react";
 import { IconCheck, IconX, IconFileCode2 } from "@tabler/icons-react";
 import { GridSpinner } from "@/components/grid-spinner";
 import { FilePathButton } from "./file-path-button";
 import type { Message } from "@/lib/types/http";
 import { ExpandableRow } from "./expandable-row";
 import { useExpandState } from "./use-expand-state";
+import { setPendingCursorPosition, scrollEditorIfMounted } from "@/hooks/use-file-editors";
 
 type ReadFileOutput = {
   content?: string;
@@ -36,6 +37,7 @@ type ToolReadMessageProps = {
   onOpenFile?: (path: string) => void;
 };
 
+// ReadStatusIcon renders the status glyph (complete/error/running) for a read card.
 function ReadStatusIcon({ status }: { status: string | undefined }) {
   if (status === "complete") return <IconCheck className="h-3.5 w-3.5 text-green-500" />;
   if (status === "error") return <IconX className="h-3.5 w-3.5 text-red-500" />;
@@ -43,30 +45,62 @@ function ReadStatusIcon({ status }: { status: string | undefined }) {
   return null;
 }
 
+// getReadSummary returns the short "Read N lines" header label for the card.
 function getReadSummary(lineCount: number | undefined): string {
   if (lineCount) return `Read ${lineCount} line${lineCount !== 1 ? "s" : ""}`;
   return "Read";
 }
 
+// formatLineRange renders the range the agent read (carried separately from
+// the file path so the link stays openable). offset is the 1-based start line;
+// limit is the line count (0 when open-ended / a single anchor).
+function formatLineRange(offset: number | undefined, limit: number | undefined): string {
+  if (!offset || offset <= 0) return "";
+  if (limit && limit > 0) return `:${offset}-${offset + limit - 1}`;
+  return `:${offset}`;
+}
+
+// parseReadMetadata pulls the read status, file path, line range, and output
+// out of a tool_read message's normalized metadata for rendering.
 function parseReadMetadata(comment: Message) {
   const metadata = comment.metadata as ToolReadMetadata | undefined;
   const status = metadata?.status;
   const readFile = metadata?.normalized?.read_file;
   const readOutput = readFile?.output;
   const filePath = readFile?.file_path;
+  const startLine = readFile?.offset;
+  const lineRange = formatLineRange(readFile?.offset, readFile?.limit);
   const hasOutput = !!readOutput?.content;
   const isSuccess = status === "complete";
-  return { status, readOutput, filePath, hasOutput, isSuccess };
+  return { status, readOutput, filePath, startLine, lineRange, hasOutput, isSuccess };
 }
 
+// ToolReadMessage renders a read tool call: the file link, line-range badge, and
+// the (expandable) read output.
 export const ToolReadMessage = memo(function ToolReadMessage({
   comment,
   worktreePath,
   onOpenFile,
 }: ToolReadMessageProps) {
-  const { status, readOutput, filePath, hasOutput, isSuccess } = parseReadMetadata(comment);
+  const { status, readOutput, filePath, startLine, lineRange, hasOutput, isSuccess } =
+    parseReadMetadata(comment);
   const autoExpanded = status === "running";
   const { isExpanded, handleToggle } = useExpandState(status, autoExpanded);
+  // Navigate the editor to the line the agent read (offset). For a newly opened
+  // file the pending position is consumed on editor mount; for an already-open
+  // file no mount happens, so scroll the live editor directly.
+  const handleOpenFile = useCallback(
+    (path: string) => {
+      if (startLine && startLine > 0) {
+        setPendingCursorPosition(path, startLine, 1);
+        onOpenFile?.(path);
+        scrollEditorIfMounted(path, worktreePath ?? null, startLine, 1);
+        return;
+      }
+      onOpenFile?.(path);
+    },
+    [onOpenFile, startLine, worktreePath],
+  );
 
   return (
     <ExpandableRow
@@ -80,12 +114,17 @@ export const ToolReadMessage = memo(function ToolReadMessage({
             {!isSuccess && <ReadStatusIcon status={status} />}
           </span>
           {filePath && (
-            <span className="min-w-0">
+            <span className="inline-flex items-baseline min-w-0">
               <FilePathButton
                 filePath={filePath}
                 worktreePath={worktreePath}
-                onOpenFile={onOpenFile}
+                onOpenFile={onOpenFile ? handleOpenFile : undefined}
               />
+              {lineRange && (
+                <span className="font-mono text-xs text-muted-foreground/70 shrink-0">
+                  {lineRange}
+                </span>
+              )}
             </span>
           )}
           {readOutput?.truncated && (

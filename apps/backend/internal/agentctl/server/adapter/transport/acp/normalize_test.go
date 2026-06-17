@@ -393,6 +393,40 @@ func TestNormalizerEdit(t *testing.T) {
 			t.Errorf("expected FilePath 'src/main.go', got %q", result.ModifyFile().FilePath)
 		}
 	})
+
+	t.Run("extracts omp startLine/endLine into mutation", func(t *testing.T) {
+		result := normalizer.NormalizeToolCall("edit", map[string]any{
+			"kind": "edit",
+			"raw_input": map[string]any{
+				"path":      "main.go",
+				"old_str_1": "a",
+				"new_str_1": "b",
+				"startLine": float64(43),
+				"endLine":   float64(94),
+			},
+		})
+		m := result.ModifyFile().Mutations[0]
+		if m.StartLine != 43 || m.EndLine != 94 {
+			t.Errorf("expected StartLine=43 EndLine=94, got %d/%d", m.StartLine, m.EndLine)
+		}
+	})
+
+	t.Run("still extracts claude old_str line numbers", func(t *testing.T) {
+		result := normalizer.NormalizeToolCall("edit", map[string]any{
+			"kind": "edit",
+			"raw_input": map[string]any{
+				"path":                        "main.go",
+				"old_str_1":                   "a",
+				"new_str_1":                   "b",
+				"old_str_start_line_number_1": float64(10),
+				"old_str_end_line_number_1":   float64(12),
+			},
+		})
+		m := result.ModifyFile().Mutations[0]
+		if m.StartLine != 10 || m.EndLine != 12 {
+			t.Errorf("expected StartLine=10 EndLine=12, got %d/%d", m.StartLine, m.EndLine)
+		}
+	})
 }
 
 // TestNormalizerRead tests the normalizer's read handling.
@@ -451,6 +485,59 @@ func TestNormalizerRead(t *testing.T) {
 		}
 		if result.CodeSearch().Path != "." {
 			t.Errorf("expected Path '.', got %q", result.CodeSearch().Path)
+		}
+	})
+
+	t.Run("strips omp line selector from path and records range", func(t *testing.T) {
+		args := map[string]any{
+			"kind": "read",
+			"raw_input": map[string]any{
+				"path": "apps/backend/internal/sentry/handlers.go:43-94",
+			},
+		}
+		result := normalizer.NormalizeToolCall("read", args)
+		rf := result.ReadFile()
+		if rf == nil {
+			t.Fatal("expected ReadFile to be set")
+		}
+		if rf.FilePath != "apps/backend/internal/sentry/handlers.go" {
+			t.Errorf("expected stripped FilePath, got %q", rf.FilePath)
+		}
+		if rf.Offset != 43 || rf.Limit != 52 {
+			t.Errorf("expected Offset=43 Limit=52, got Offset=%d Limit=%d", rf.Offset, rf.Limit)
+		}
+	})
+
+	t.Run("strips omp selector arriving on a tool_call_update", func(t *testing.T) {
+		payload := normalizer.NormalizeToolCall("read", map[string]any{"kind": "read"})
+		normalizer.UpdatePayloadInput(payload, map[string]any{"path": "main.go:50+150"}, nil)
+		rf := payload.ReadFile()
+		if rf == nil {
+			t.Fatal("expected ReadFile to be set")
+		}
+		if rf.FilePath != "main.go" {
+			t.Errorf("expected stripped FilePath 'main.go', got %q", rf.FilePath)
+		}
+		if rf.Offset != 50 || rf.Limit != 150 {
+			t.Errorf("expected Offset=50 Limit=150, got Offset=%d Limit=%d", rf.Offset, rf.Limit)
+		}
+	})
+
+	t.Run("populates range from update even when FilePath already set", func(t *testing.T) {
+		payload := normalizer.NormalizeToolCall("read", map[string]any{
+			"kind":      "read",
+			"raw_input": map[string]any{"path": "main.go"},
+		})
+		if payload.ReadFile().FilePath != "main.go" {
+			t.Fatalf("expected initial FilePath 'main.go', got %q", payload.ReadFile().FilePath)
+		}
+		normalizer.UpdatePayloadInput(payload, map[string]any{"path": "main.go:50+150"}, nil)
+		rf := payload.ReadFile()
+		if rf.FilePath != "main.go" {
+			t.Errorf("expected FilePath unchanged 'main.go', got %q", rf.FilePath)
+		}
+		if rf.Offset != 50 || rf.Limit != 150 {
+			t.Errorf("expected Offset=50 Limit=150 from update, got Offset=%d Limit=%d", rf.Offset, rf.Limit)
 		}
 	})
 }
