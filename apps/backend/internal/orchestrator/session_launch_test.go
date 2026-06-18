@@ -400,7 +400,7 @@ func TestLaunchPrepare_PassthroughDoesNotRecurse(t *testing.T) {
 	select {
 	case <-done:
 		// returned without recursing
-	case <-time.After(2 * time.Second):
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("LaunchSession recursed indefinitely (timed out)")
 	}
 }
@@ -565,6 +565,30 @@ func TestFindReusableCreatedSession(t *testing.T) {
 	})
 }
 
+// TestProfilesCompatible covers the agent-profile matching rule used by
+// launchStart's reuse path: identical or either-side-empty is fine; differing
+// non-empty profiles must NOT share a session row.
+func TestProfilesCompatible(t *testing.T) {
+	cases := []struct {
+		name         string
+		caller, sess string
+		want         bool
+	}{
+		{"both empty", "", "", true},
+		{"caller empty", "", "p", true},
+		{"session empty", "p", "", true},
+		{"same profile", "p", "p", true},
+		{"different profiles", "p1", "p2", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := profilesCompatible(tc.caller, tc.sess); got != tc.want {
+				t.Errorf("profilesCompatible(%q,%q)=%v, want %v", tc.caller, tc.sess, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCanReusePreparedSession pins the gate that protects launchStart from
 // adopting a prepared session when the caller has chosen its own executor,
 // executor profile, or priority — start_created carries none of those, so
@@ -638,7 +662,7 @@ func TestLaunchStart_ReusesPreparedSession(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("LaunchSession hung")
 	}
 
@@ -693,7 +717,7 @@ func TestLaunchStart_NoReuseOnProfileMismatch(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("LaunchSession hung")
 	}
 
@@ -748,7 +772,7 @@ func TestEnsureSession_AutoStartDoesNotDeadlock(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("EnsureSession deadlocked: launchStart re-acquired ensureLock that EnsureSession already holds")
 	}
 }

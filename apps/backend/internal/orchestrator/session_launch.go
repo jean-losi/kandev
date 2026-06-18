@@ -191,7 +191,7 @@ func (s *Service) launchStart(ctx context.Context, req *LaunchSessionRequest) (*
 			defer release()
 		}
 		if reused := s.findReusableCreatedSession(ctx, req.TaskID); reused != nil &&
-			(req.AgentProfileID == "" || req.AgentProfileID == reused.AgentProfileID) {
+			profilesCompatible(req.AgentProfileID, reused.AgentProfileID) {
 			req.SessionID = reused.ID
 			if req.AgentProfileID == "" {
 				req.AgentProfileID = reused.AgentProfileID
@@ -222,6 +222,17 @@ func (s *Service) canReusePreparedSession(req *LaunchSessionRequest) bool {
 		req.Priority == ""
 }
 
+// profilesCompatible reports whether two agent profile IDs are compatible for
+// reuse: identical, or at least one is empty (start_created can resolve the
+// missing side from the other). Different non-empty profiles are intentionally
+// distinct launches and must NOT share a session row.
+func profilesCompatible(caller, session string) bool {
+	if caller == "" || session == "" {
+		return true
+	}
+	return caller == session
+}
+
 // findReusableCreatedSession returns a CREATED session on the task that an
 // explicit start should adopt instead of creating a new row. Primary wins; the
 // most-recently-updated CREATED session is the fallback. Non-CREATED states
@@ -231,9 +242,10 @@ func (s *Service) canReusePreparedSession(req *LaunchSessionRequest) bool {
 func (s *Service) findReusableCreatedSession(ctx context.Context, taskID string) *models.TaskSession {
 	sessions, err := s.repo.ListTaskSessions(ctx, taskID)
 	if err != nil {
-		// Swallowing the error would route the caller into StartTask and write
-		// the duplicate session row the reuse path is meant to prevent. Surface
-		// the failure so a transient DB error is visible in the logs instead.
+		// Returning nil here means launchStart still falls through to
+		// StartTask — same behavior as before this PR landed when the lookup
+		// failed. The warn just keeps a transient DB failure visible in the
+		// logs rather than letting it race silently into a fresh session.
 		s.logger.Warn("findReusableCreatedSession: list sessions failed; skipping reuse",
 			zap.String("task_id", taskID), zap.Error(err))
 		return nil
