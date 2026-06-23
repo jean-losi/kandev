@@ -41,6 +41,8 @@ func (c *Controller) RegisterHTTPRoutes(router *gin.Engine) {
 	api.GET("/task-prs", c.httpListTaskPRs)
 	api.POST("/task-prs", c.httpCreateTaskPR)
 	api.GET("/task-prs/:taskId", c.httpGetTaskPR)
+	api.PUT("/tasks/:taskId/issue", c.httpLinkTaskIssue)
+	api.DELETE("/tasks/:taskId/issue", c.httpUnlinkTaskIssue)
 	api.GET("/tasks/:taskId/ci-options", c.httpGetTaskCIOptions)
 	api.PATCH("/tasks/:taskId/ci-options", c.httpPatchTaskCIOptions)
 
@@ -199,6 +201,62 @@ func (c *Controller) httpGetTaskPR(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, tp)
+}
+
+func (c *Controller) httpLinkTaskIssue(ctx *gin.Context) {
+	var req LinkTaskIssueRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+	resp, err := c.service.LinkTaskIssue(ctx.Request.Context(), ctx.Param("taskId"), req)
+	if err != nil {
+		c.handleTaskIssueLinkError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, resp)
+}
+
+func (c *Controller) httpUnlinkTaskIssue(ctx *gin.Context) {
+	if err := c.service.UnlinkTaskIssue(ctx.Request.Context(), ctx.Param("taskId")); err != nil {
+		c.handleTaskIssueLinkError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"unlinked": true})
+}
+
+func (c *Controller) handleTaskIssueLinkError(ctx *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrNoClient):
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "GitHub is not configured. Connect GitHub in Settings > Integrations.",
+			"code":  "github_not_configured",
+		})
+	case errors.Is(err, ErrInvalidIssueReference):
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, ErrIssueRepositoryMismatch):
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+	case errors.Is(err, errStoreUnavailable):
+		c.logger.Error("task issue store unavailable", zap.Error(err))
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "GitHub task issue linking is temporarily unavailable. Please try again.",
+			"code":  "github_task_issue_unavailable",
+		})
+	case errors.Is(err, ErrTaskNotFound):
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+	default:
+		var apiErr *GitHubAPIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.StatusCode {
+			case http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden:
+				c.logger.Debug("GitHub issue fetch failed", zap.Int("status", apiErr.StatusCode), zap.Error(err))
+				ctx.JSON(apiErr.StatusCode, gin.H{"error": "failed to fetch GitHub issue"})
+				return
+			}
+		}
+		c.logger.Error("task issue link request failed", zap.Error(err))
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to link GitHub issue"})
+	}
 }
 
 func (c *Controller) httpGetTaskCIOptions(ctx *gin.Context) {
