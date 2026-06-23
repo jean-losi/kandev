@@ -46,6 +46,7 @@ interface ComboboxProps {
   triggerClassName?: string;
   showSearch?: boolean;
   testId?: string;
+  dropdownTestId?: string;
   popoverSide?: "top" | "right" | "bottom" | "left";
   popoverAlign?: "start" | "center" | "end";
   /** When true, the trigger always renders the plain label text instead of renderLabel. */
@@ -147,6 +148,7 @@ export const Combobox = memo(function Combobox({
   triggerClassName,
   showSearch = true,
   testId,
+  dropdownTestId,
   popoverSide,
   popoverAlign = "start",
   plainTrigger = false,
@@ -201,7 +203,12 @@ export const Combobox = memo(function Combobox({
         align={popoverAlign}
         portal={false}
       >
-        <Command value={highlighted} onValueChange={setHighlighted} filter={filter}>
+        <Command
+          value={highlighted}
+          onValueChange={setHighlighted}
+          filter={filter}
+          data-testid={dropdownTestId}
+        >
           {dropdownLabel || headerAction ? (
             <div className="text-muted-foreground flex items-center justify-between gap-2 px-2 py-1 text-xs border-b">
               <span>{dropdownLabel}</span>
