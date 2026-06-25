@@ -107,3 +107,38 @@ func (a *taskDeleterAdapter) DeleteTask(ctx context.Context, taskID string) erro
 	}
 	return err
 }
+
+// repositoryLookupAdapter satisfies the linear/jira/sentry RepositoryLookup
+// interface over the task service. It is the validation seam for a watcher's
+// optional repository binding. The task service's GetRepository filters
+// soft-deleted rows and errors on a miss, so a missing or deleted repository
+// maps to ok=false and watcher create/update rejects the binding.
+type repositoryLookupAdapter struct {
+	svc *taskservice.Service
+}
+
+func (a *repositoryLookupAdapter) GetRepository(ctx context.Context, id string) (string, string, bool) {
+	repo, err := a.svc.GetRepository(ctx, id)
+	if err != nil || repo == nil {
+		return "", "", false
+	}
+	return repo.WorkspaceID, repo.DefaultBranch, true
+}
+
+// RepositoryExists satisfies orchestrator.RepositoryChecker. It uses the
+// workspace listing (which excludes soft-deleted repos) so a definitive
+// "absent" is distinguishable from a transient error: a non-nil err lets the
+// dispatch pre-flight fail open, while (false, nil) means the bound repository
+// was removed and the watcher should self-heal.
+func (a *repositoryLookupAdapter) RepositoryExists(ctx context.Context, workspaceID, repositoryID string) (bool, error) {
+	repos, err := a.svc.ListRepositories(ctx, workspaceID)
+	if err != nil {
+		return false, err
+	}
+	for _, repo := range repos {
+		if repo.ID == repositoryID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
