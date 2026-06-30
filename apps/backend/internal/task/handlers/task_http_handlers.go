@@ -15,6 +15,7 @@ import (
 	"github.com/kandev/kandev/internal/task/dto"
 	"github.com/kandev/kandev/internal/task/models"
 	"github.com/kandev/kandev/internal/task/service"
+	usermodels "github.com/kandev/kandev/internal/user/models"
 	"github.com/kandev/kandev/internal/worktree"
 	v1 "github.com/kandev/kandev/pkg/api/v1"
 	"go.uber.org/zap"
@@ -589,11 +590,60 @@ func (h *TaskHandlers) httpCreateTask(c *gin.Context) {
 	// Use the backend-resolved workflow step ID (from the created task) instead of the request's
 	resolvedStepID := taskDTO.WorkflowStepID
 	h.handlePostCreateTaskSession(c, &response, taskDTO.ID, taskDTO.Description, body, resolvedStepID)
+	h.recordTaskCreateLastUsed(c.Request.Context(), body, repos)
 
 	// Associate PR with task if any repository input contains a PR URL
 	h.associatePRFromRepoInputs(taskDTO.ID, response.TaskSessionID, body.Repositories)
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *TaskHandlers) recordTaskCreateLastUsed(ctx context.Context, body httpCreateTaskRequest, repos []dto.TaskRepositoryInput) {
+	if h.taskCreateLastUsedRecorder == nil {
+		return
+	}
+	patch := buildTaskCreateLastUsedPatch(body, repos)
+	if err := h.taskCreateLastUsedRecorder.RecordTaskCreateLastUsed(ctx, patch); err != nil {
+		h.logger.Warn("failed to record task-create last-used settings", zap.Error(err))
+	}
+}
+
+func buildTaskCreateLastUsedPatch(body httpCreateTaskRequest, repos []dto.TaskRepositoryInput) usermodels.TaskCreateLastUsed {
+	patch := usermodels.TaskCreateLastUsed{
+		AgentProfileID:    body.AgentProfileID,
+		ExecutorProfileID: body.ExecutorProfileID,
+	}
+	for i, repo := range repos {
+		if repo.RepositoryID == "" {
+			continue
+		}
+		branch := taskCreateLastUsedBranch(body, i, repo)
+		patch.RepositoryID = repo.RepositoryID
+		patch.Branch = branch
+		break
+	}
+	return patch
+}
+
+func taskCreateLastUsedBranch(
+	body httpCreateTaskRequest,
+	index int,
+	repo dto.TaskRepositoryInput,
+) string {
+	if index < len(body.Repositories) && body.Repositories[index].FreshBranch {
+		raw := body.Repositories[index]
+		return firstNonEmpty(raw.BaseBranch, raw.CheckoutBranch)
+	}
+	return firstNonEmpty(repo.CheckoutBranch, repo.BaseBranch)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // commitFreshBranch wraps the post-CreateTask fresh-branch sequence: run the

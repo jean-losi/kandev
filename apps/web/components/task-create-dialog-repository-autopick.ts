@@ -6,6 +6,7 @@ import type { DialogFormState, TaskRepoRow } from "@/components/task-create-dial
 import { getLocalStorage } from "@/lib/local-storage";
 import { STORAGE_KEYS } from "@/lib/settings/constants";
 import { createDebugLogger, isDebug } from "@/lib/debug/log";
+import { syncTaskCreateLastUsed } from "@/components/task-create-dialog-handlers";
 
 const selectionDebug = createDebugLogger("task-create:selection");
 
@@ -49,6 +50,9 @@ export function useRepositoryAutoSelectEffect(
     if (decision.defer) return;
     const { pickId } = decision;
     if (rows.length > 0 && !canReplaceEmptyRepositoryPlaceholder(rows, pickId)) return;
+    if (shouldQueueRepositoryFallback(decision)) {
+      syncTaskCreateLastUsed({ repository_id: pickId, branch: null });
+    }
     void Promise.resolve().then(() => {
       setRepositories((prev) => {
         if (prev.length > 0) return replaceSeededRepositoryRows(prev, pickId);
@@ -91,14 +95,6 @@ function decideRepositoryAutoPick(
   const settingsRepoId = lastUsedRepositoryId ?? null;
   const localStorageValid = isRepositoryIdValid(localStorageRepoId, repositories);
   const settingsValid = isRepositoryIdValid(settingsRepoId, repositories);
-  if (localStorageRepoId && localStorageValid) {
-    return buildRepositoryAutoPickDecision("localStorage:lastRepositoryId", localStorageRepoId, {
-      localStorageRepoId,
-      localStorageValid,
-      settingsRepoId,
-      settingsValid,
-    });
-  }
   if (settingsRepoId && settingsValid) {
     return buildRepositoryAutoPickDecision("settings:taskCreateLastUsed", settingsRepoId, {
       localStorageRepoId,
@@ -107,9 +103,17 @@ function decideRepositoryAutoPick(
       settingsValid,
     });
   }
-  if (!userSettingsLoaded && repositories.length !== 1) {
+  if (!userSettingsLoaded) {
     return buildRepositoryAutoPickDecision("user-settings-loading", null, {
       defer: true,
+      localStorageRepoId,
+      localStorageValid,
+      settingsRepoId,
+      settingsValid,
+    });
+  }
+  if (localStorageRepoId && localStorageValid) {
+    return buildRepositoryAutoPickDecision("localStorage:lastRepositoryId", localStorageRepoId, {
       localStorageRepoId,
       localStorageValid,
       settingsRepoId,
@@ -143,6 +147,12 @@ function buildRepositoryAutoPickDecision(
 
 function isRepositoryIdValid(repositoryId: string | null, repositories: Repository[]): boolean {
   return Boolean(repositoryId && repositories.some((r: Repository) => r.id === repositoryId));
+}
+
+function shouldQueueRepositoryFallback(
+  decision: RepositoryAutoPickDecision,
+): decision is RepositoryAutoPickDecision & { pickId: string } {
+  return decision.source === "localStorage:lastRepositoryId" && Boolean(decision.pickId);
 }
 
 function logRepositoryAutoPick(

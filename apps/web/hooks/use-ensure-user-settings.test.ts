@@ -13,12 +13,6 @@ const mockFetchUserSettings = vi.fn();
 const mockSetUserSettings = vi.fn((settings: UserSettingsState) => {
   mockState.userSettings = settings;
 });
-const mockReadPendingTaskCreateLastUsedState = vi.fn<[], PendingTaskCreateLastUsed>(() => ({
-  repositoryId: undefined,
-  branch: undefined,
-  agentProfileId: undefined,
-  executorProfileId: undefined,
-}));
 const mockReadQueuedTaskCreateLastUsedState = vi.fn<[], PendingTaskCreateLastUsed>(() => ({
   repositoryId: undefined,
   branch: undefined,
@@ -42,7 +36,6 @@ vi.mock("@/lib/api/domains/settings-api", () => ({
 }));
 
 vi.mock("@/components/task-create-dialog-handlers", () => ({
-  readPendingTaskCreateLastUsedState: () => mockReadPendingTaskCreateLastUsedState(),
   readQueuedTaskCreateLastUsedState: () => mockReadQueuedTaskCreateLastUsedState(),
 }));
 
@@ -154,8 +147,8 @@ describe("useEnsureUserSettings", () => {
     await waitFor(() => expect(mockSetUserSettings).toHaveBeenCalled());
   });
 
-  it("merges only defined pending task-create fields over fetched settings", async () => {
-    mockReadPendingTaskCreateLastUsedState.mockReturnValue({
+  it("merges only defined queued task-create fields over fetched settings", async () => {
+    mockReadQueuedTaskCreateLastUsedState.mockReturnValue({
       repositoryId: undefined,
       branch: undefined,
       agentProfileId: "agent-2",
@@ -181,9 +174,9 @@ describe("useEnsureUserSettings", () => {
     });
   });
 
-  it("preserves pending task-create fields when multiple callers join the same fetch", async () => {
+  it("preserves queued task-create fields when multiple callers join the same fetch", async () => {
     let resolveFetch: (value: unknown) => void = () => undefined;
-    mockReadPendingTaskCreateLastUsedState.mockReturnValue({
+    mockReadQueuedTaskCreateLastUsedState.mockReturnValue({
       repositoryId: undefined,
       branch: "feature",
       agentProfileId: undefined,
@@ -236,6 +229,37 @@ describe("useEnsureUserSettings", () => {
     await waitFor(() => expect(mockFetchUserSettings).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(mockSetUserSettings).toHaveBeenCalled());
     expect(mockSetUserSettings.mock.calls[0]![0].taskCreateLastUsed.repositoryId).toBe("repo-2");
+  });
+});
+
+describe("useEnsureUserSettings — loaded settings overlay", () => {
+  it("applies queued task-create fields when settings are already loaded", () => {
+    mockState.userSettings = {
+      ...makeUnloadedSettings(),
+      loaded: true,
+      taskCreateLastUsed: {
+        repositoryId: "repo-1",
+        branch: "main",
+        agentProfileId: "agent-1",
+        executorProfileId: "exec-1",
+      },
+    };
+    mockReadQueuedTaskCreateLastUsedState.mockReturnValue({
+      repositoryId: "repo-2",
+      branch: "feature",
+      agentProfileId: undefined,
+      executorProfileId: undefined,
+    });
+
+    const { result } = renderHook(() => useEnsureUserSettings(true));
+
+    expect(mockFetchUserSettings).not.toHaveBeenCalled();
+    expect(result.current.userSettings.taskCreateLastUsed).toEqual({
+      repositoryId: "repo-2",
+      branch: "feature",
+      agentProfileId: "agent-1",
+      executorProfileId: "exec-1",
+    });
   });
 });
 

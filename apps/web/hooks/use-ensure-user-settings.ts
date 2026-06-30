@@ -2,10 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAppStore } from "@/components/state-provider";
-import {
-  readPendingTaskCreateLastUsedState,
-  readQueuedTaskCreateLastUsedState,
-} from "@/components/task-create-dialog-handlers";
+import { readQueuedTaskCreateLastUsedState } from "@/components/task-create-dialog-handlers";
 import { fetchUserSettings } from "@/lib/api/domains/settings-api";
 import { mapUserSettingsResponse } from "@/lib/ssr/user-settings";
 import type { TaskCreateLastUsedState, UserSettingsState } from "@/lib/state/slices/settings/types";
@@ -56,8 +53,12 @@ function compactTaskCreateLastUsedOverlay(pending: Partial<TaskCreateLastUsedSta
 function mergeTaskCreateLastUsedForFetch(result: LoadedUserSettings): UserSettingsState {
   return mergeTaskCreateLastUsedOverlay(result.settings, {
     ...compactTaskCreateLastUsedOverlay(readQueuedTaskCreateLastUsedState()),
-    ...compactTaskCreateLastUsedOverlay(readPendingTaskCreateLastUsedState()),
   });
+}
+
+function mergeTaskCreateLastUsedForLoadedSettings(settings: UserSettingsState): UserSettingsState {
+  if (!settings.loaded) return settings;
+  return mergeTaskCreateLastUsedOverlay(settings, readQueuedTaskCreateLastUsedState());
 }
 
 export function __resetEnsureUserSettingsForTests() {
@@ -95,8 +96,10 @@ export function useEnsureUserSettings(enabled = true) {
     };
   }, [enabled, setUserSettings, userSettings.loaded]);
 
+  const effectiveUserSettings = mergeTaskCreateLastUsedForLoadedSettings(userSettings);
+
   return {
-    loaded: userSettings.loaded || fetchSettled,
-    userSettings,
+    loaded: effectiveUserSettings.loaded || fetchSettled,
+    userSettings: effectiveUserSettings,
   };
 }
