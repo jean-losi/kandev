@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
+import { useQueryClient } from "@tanstack/react-query";
 import { KanbanCardContextMenu } from "@/components/kanban-card-context-menu";
 import { KanbanCardShell } from "@/components/kanban-card-content";
 import {
@@ -18,8 +19,10 @@ import {
 import type { KanbanExternalLinkAvailability } from "./kanban-external-link-availability";
 import { TaskGitHubIssueDialog } from "@/components/task/task-github-issue-dialog";
 import { TaskGitHubPRDialog } from "@/components/task/task-github-pr-dialog";
+import { useCachedRepositories } from "@/hooks/domains/workspace/use-repository-cache";
 import { useTaskWorkflowMove } from "@/hooks/use-task-workflow-move";
-import { useTaskMultiSelectStore } from "@/hooks/use-task-multi-select";
+import { sortIdsByCreatedDesc } from "@/lib/kanban/task-order";
+import { workflowSnapshotQueryData } from "@/lib/query/workflow-snapshot-cache";
 import { repositorySlug } from "@/lib/repository-slug";
 import { formatUserHomePath } from "@/lib/utils";
 import { repositoryId as toRepositoryId, type Repository, type TaskState } from "@/lib/types/http";
@@ -95,6 +98,34 @@ interface KanbanCardProps {
   isMultiSelectMode?: boolean;
 }
 
+function useKanbanCardBulkMoveHelpers(currentWorkflowId: string | null) {
+  const queryClient = useQueryClient();
+  const sortByDisplayOrder = useCallback(
+    (ids: string[]) => {
+      const taskById = new Map<string, { createdAt?: string }>();
+      for (const snapshot of workflowSnapshotQueryData(queryClient)) {
+        for (const snapshotTask of snapshot.tasks) {
+          taskById.set(snapshotTask.id, { createdAt: snapshotTask.created_at });
+        }
+      }
+      return sortIdsByCreatedDesc(ids, taskById);
+    },
+    [queryClient],
+  );
+  const getWorkflowIdForTask = useCallback(
+    (taskId: string) => {
+      for (const snapshot of workflowSnapshotQueryData(queryClient)) {
+        if (snapshot.tasks.some((snapshotTask) => snapshotTask.id === taskId)) {
+          return snapshot.workflow.id;
+        }
+      }
+      return currentWorkflowId;
+    },
+    [currentWorkflowId, queryClient],
+  );
+  return { sortByDisplayOrder, getWorkflowIdForTask };
+}
+
 function useKanbanCardMoveMenuActions({
   task,
   steps,
@@ -104,7 +135,9 @@ function useKanbanCardMoveMenuActions({
 }: Pick<KanbanCardProps, "task" | "steps" | "isSelected" | "selectedIds" | "onMove">) {
   const moveTargets = useKanbanCardMoveTargets(task.id, steps);
   const moveTasks = useTaskWorkflowMove();
-  const { sortByDisplayOrder, getWorkflowIdForTask } = useTaskMultiSelectStore();
+  const { sortByDisplayOrder, getWorkflowIdForTask } = useKanbanCardBulkMoveHelpers(
+    moveTargets.currentWorkflowId,
+  );
 
   const runMoveTasks = (taskIds: string[], workflowId: string, stepId: string) => {
     void moveTasks(taskIds, workflowId, stepId).catch(() => {
@@ -340,9 +373,7 @@ export function dispatchKanbanCardClick(
 
 function useActiveWorkspaceRepositories() {
   const activeWorkspaceId = useAppStore((state) => state.workspaces.activeId);
-  return useAppStore((state) =>
-    activeWorkspaceId ? (state.repositories.itemsByWorkspaceId[activeWorkspaceId] ?? []) : [],
-  );
+  return useCachedRepositories(activeWorkspaceId);
 }
 
 function KanbanCardFrame({

@@ -10,7 +10,7 @@ import { SidebarFilterBar } from "../sidebar-filter/sidebar-filter-bar";
 import type { StepDef } from "../task-switcher-context-menu";
 import type { TaskMoveWorkflow } from "../task-move-context-menu";
 import { applyView } from "@/lib/sidebar/apply-view";
-import { useAppStore, useAppStoreApi } from "@/components/state-provider";
+import { useAppStore } from "@/components/state-provider";
 import { useEffectiveSidebarView } from "@/hooks/domains/sidebar/use-effective-sidebar-view";
 import { useSidebarTaskPrefs } from "@/hooks/domains/sidebar/use-sidebar-task-prefs";
 import { useRepositories } from "@/hooks/domains/workspace/use-repositories";
@@ -19,7 +19,10 @@ import { TaskCreateDialog } from "@/components/task-create-dialog";
 import { TaskArchiveConfirmDialog } from "../task-archive-confirm-dialog";
 import { TaskDeleteConfirmDialog } from "../task-delete-confirm-dialog";
 import { SidebarLinkDialogs } from "../task-session-sidebar-dialogs";
-import { useSidebarLinkActions } from "../task-session-sidebar-link-actions";
+import {
+  useSidebarLinkActions,
+  type SidebarLinkTarget,
+} from "../task-session-sidebar-link-actions";
 import { useSidebarTaskLinking } from "../task-session-sidebar-task-linking";
 import { useSheetData, useSheetActions } from "./session-task-switcher-sheet-hooks";
 
@@ -30,9 +33,11 @@ type SessionTaskSwitcherSheetProps = {
   workflowId: string | null;
 };
 
-function useMobileTaskLinking(workspaceId: string | null) {
-  const store = useAppStoreApi();
-  const actions = useSidebarLinkActions(store);
+function useMobileTaskLinking(
+  workspaceId: string | null,
+  linkTaskById: ReadonlyMap<string, SidebarLinkTarget>,
+) {
+  const actions = useSidebarLinkActions(linkTaskById);
   const taskListHandlers = useSidebarTaskLinking(workspaceId, actions);
   const { repositories } = useRepositories(workspaceId);
 
@@ -140,7 +145,7 @@ export const SessionTaskSwitcherSheet = memo(function SessionTaskSwitcherSheet({
   const [dialogOpen, setDialogOpen] = useState(false);
   const data = useSheetData(workspaceId);
   const actions = useSheetActions(workspaceId, onOpenChange);
-  const linking = useMobileTaskLinking(workspaceId);
+  const linking = useMobileTaskLinking(workspaceId, data.linkTaskById);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

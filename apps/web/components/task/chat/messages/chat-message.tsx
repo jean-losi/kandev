@@ -20,7 +20,7 @@ import { SenderTaskBadge, type SenderTaskInfo } from "./sender-task-badge";
 import { MemoizedMarkdown } from "@/components/shared/memoized-markdown";
 import { markdownComponents } from "@/components/shared/markdown-components";
 import { ImagePreviewDialog } from "@/components/task/chat/image-preview-dialog";
-import { useAppStore } from "@/components/state-provider";
+import { useCustomPrompts } from "@/hooks/domains/settings/use-custom-prompts";
 import {
   buildPromptMentionNames,
   splitPreparedPromptMentionSegments,
@@ -171,7 +171,7 @@ type MarkdownChildrenProps<T extends PromptMentionMarkdownTag> = ComponentPropsW
 };
 
 function usePromptMentionNames() {
-  const prompts = useAppStore((state) => state.prompts.items);
+  const { prompts } = useCustomPrompts();
   return useMemo(() => prompts.map((prompt) => prompt.name), [prompts]);
 }
 

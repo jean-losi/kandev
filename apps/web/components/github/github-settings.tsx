@@ -22,7 +22,7 @@ import { useIssueWatches } from "@/hooks/domains/github/use-issue-watches";
 import { WorkspaceScopedSection } from "@/components/integrations/workspace-scoped-section";
 import { ResetWatchDialog, useWatchResetController } from "@/components/watches/reset-watch-dialog";
 import { cleanupMergedReviewTasks, cleanupClosedIssueTasks } from "@/lib/api/domains/github-api";
-import type { ReviewWatch, IssueWatch } from "@/lib/types/github";
+import type { GitHubStatus, ReviewWatch, IssueWatch } from "@/lib/types/github";
 
 // CleanupNowButton runs a manual global sweep over the dedup tables. Useful
 // for users who upgraded with a pile of legacy merged-PR / closed-issue
@@ -267,7 +267,11 @@ function useIssueWatchActions(workspaceId?: string | null) {
   };
 }
 
-export function GitHubConnectionSection() {
+export function GitHubConnectionSection({
+  initialStatus,
+}: {
+  initialStatus?: GitHubStatus | null;
+}) {
   return (
     <>
       <div>
@@ -284,7 +288,7 @@ export function GitHubConnectionSection() {
       <SettingsSection title="Connection Status" description="GitHub authentication status">
         <Card>
           <CardContent className="py-3">
-            <GitHubStatusCard />
+            <GitHubStatusCard initialStatus={initialStatus} />
           </CardContent>
         </Card>
       </SettingsSection>
@@ -308,14 +312,18 @@ function PerWorkspaceSection({ workspaceId }: { workspaceId: string }) {
 }
 
 type GitHubIntegrationPageProps = {
+  initialStatus?: GitHubStatus | null;
   workspaceId?: string;
 };
 
-export function GitHubIntegrationPage({ workspaceId }: GitHubIntegrationPageProps = {}) {
+export function GitHubIntegrationPage({
+  initialStatus,
+  workspaceId,
+}: GitHubIntegrationPageProps = {}) {
   return (
     <TooltipProvider>
       <div className="space-y-8">
-        <GitHubConnectionSection />
+        <GitHubConnectionSection initialStatus={initialStatus} />
         <WorkspaceScopedSection workspaceId={workspaceId}>
           {(ws) => <PerWorkspaceSection key={ws} workspaceId={ws} />}
         </WorkspaceScopedSection>

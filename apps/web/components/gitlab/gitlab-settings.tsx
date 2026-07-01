@@ -27,9 +27,9 @@ import {
   clearGitLabToken,
   configureGitLabHost,
   configureGitLabToken,
-  fetchGitLabStatus,
 } from "@/lib/api/domains/gitlab-api";
 import type { GitLabStatus } from "@/lib/types/gitlab";
+import { useGitLabStatus } from "@/hooks/domains/gitlab/use-gitlab-status";
 
 const DEFAULT_HOST = "https://gitlab.com";
 
@@ -241,24 +241,11 @@ export function GitLabIntegrationPage({ workspaceId }: GitLabIntegrationPageProp
 }
 
 function GitLabConnectionSection() {
-  const [status, setStatus] = useState<GitLabStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { status, loading, refresh } = useGitLabStatus();
 
   const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const next = await fetchGitLabStatus({ cache: "no-store" });
-      setStatus(next);
-    } catch {
-      setStatus(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+    await refresh();
+  }, [refresh]);
 
   return (
     <SettingsSection
