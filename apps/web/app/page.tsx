@@ -13,6 +13,7 @@ import { listWorkspaceTaskPRs } from "@/lib/api/domains/github-api";
 import { snapshotToState } from "@/lib/ssr/mapper";
 import { mapUserSettingsResponse } from "@/lib/ssr/user-settings";
 import { resolveDesiredWorkflowId } from "@/lib/kanban/resolve-workflow";
+import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/routing/route-bootstrap";
 import { resolveActiveId } from "@/lib/ssr/resolve-active-id";
 import { readCookies } from "@/lib/server/cookies";
 import type { AppState } from "@/lib/state/store";
@@ -73,6 +74,16 @@ function buildBaseState(
   };
 }
 
+export function resolveActiveKanbanWorkspaceId(
+  workspaces: WorkspaceItem[],
+  workspaceId: string | undefined,
+  cookieWorkspaceId: string | null,
+  settingsWorkspaceId: string | null,
+): string | null {
+  const kanbanWorkspaces = workspaces.filter((workspace) => !workspace.office_workflow_id);
+  return resolveActiveId(kanbanWorkspaces, workspaceId, cookieWorkspaceId, settingsWorkspaceId);
+}
+
 async function loadSnapshotState(
   workflowId: string,
   taskId: string | undefined,
@@ -125,10 +136,14 @@ export default async function Page({ searchParams }: PageProps) {
     const settingsWorkspaceId = userSettingsResponse?.settings?.workspace_id || null;
     const settingsWorkflowId = userSettingsResponse?.settings?.workflow_filter_id || null;
     // The sidebar picker writes the selected workspace to this cookie so the
-    // choice survives a refresh even when office is disabled (userSettings is
-    // not updated on select). Priority: URL param > cookie > saved setting.
-    const cookieWorkspaceId = cookieStore?.get("office-active-workspace")?.value ?? null;
-    const activeWorkspaceId = resolveActiveId(
+    // choice survives a refresh even when userSettings is not updated on select.
+    // Kanban home only resolves against kanban workspaces; office workspaces
+    // belong under /office.
+    const cookieWorkspaceId = cookieStore?.get(ACTIVE_WORKSPACE_COOKIE)?.value ?? null;
+    // `readCookies()` is client-only in this code path; during SSR this is empty.
+    // Workspace selection still works because spa-routes.tsx re-hydrates from
+    // `readActiveWorkspaceCookie()` and the generic resolver on first client render.
+    const activeWorkspaceId = resolveActiveKanbanWorkspaceId(
       workspaces.workspaces,
       workspaceId,
       cookieWorkspaceId,

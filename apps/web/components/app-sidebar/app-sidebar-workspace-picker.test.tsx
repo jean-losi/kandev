@@ -188,11 +188,23 @@ describe("AppSidebarWorkspacePicker — workspace select", () => {
     expect(screen.getByTestId(OFFICE_WORKSPACE_ITEM).textContent).toContain("Office");
   });
 
-  it("still no-ops on the active workspace when office routing is enabled", () => {
+  it("routes to the active kanban workspace home when office routing is enabled", () => {
     storeState.features.office = true;
     render(<AppSidebarWorkspacePicker />);
 
     fireEvent.click(screen.getByTestId(KANBAN_WORKSPACE_ITEM));
+
+    expect(cookieWrites.some((c) => c.startsWith("kandev-active-workspace=w1"))).toBe(true);
+    expect(storeState.setActiveWorkspace).not.toHaveBeenCalled();
+    expect(navigationMock.push).toHaveBeenCalledWith("/?workspaceId=w1");
+  });
+
+  it("does not route when selecting the active office workspace", () => {
+    storeState.features.office = true;
+    storeState.workspaces.activeId = "w2";
+    render(<AppSidebarWorkspacePicker />);
+
+    fireEvent.click(screen.getByTestId(OFFICE_WORKSPACE_ITEM));
 
     expect(cookieWrites).toEqual([]);
     expect(storeState.setActiveWorkspace).not.toHaveBeenCalled();
