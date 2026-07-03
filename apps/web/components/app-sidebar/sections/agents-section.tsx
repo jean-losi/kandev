@@ -33,6 +33,7 @@ export function AgentsSection({ collapsed }: AgentsSectionProps) {
   const agents = useAppStore((s) => s.office.agentProfiles);
   const workspaceId = useAppStore((s) => s.workspaces.activeId);
   const setOfficeAgentProfiles = useAppStore((s) => s.setOfficeAgentProfiles);
+  const visibleAgents = workspaceId ? agents : [];
 
   const refetchAgents = useCallback(async () => {
     if (!workspaceId || !inOffice) return;
@@ -43,6 +44,12 @@ export function AgentsSection({ collapsed }: AgentsSectionProps) {
   useEffect(() => {
     refetchAgents();
   }, [refetchAgents]);
+
+  useEffect(() => {
+    if (inOffice && !workspaceId && agents.length > 0) {
+      setOfficeAgentProfiles([]);
+    }
+  }, [agents.length, inOffice, setOfficeAgentProfiles, workspaceId]);
 
   useOfficeRefetch("agents", refetchAgents);
 
@@ -93,10 +100,10 @@ export function AgentsSection({ collapsed }: AgentsSectionProps) {
       headerActionVisibility="always"
       defaultExpanded
     >
-      {agents.length === 0 ? (
+      {visibleAgents.length === 0 ? (
         <p className="px-3 py-2 text-xs text-muted-foreground">No agents yet</p>
       ) : (
-        agents.map((agent) => <AgentRow key={agent.id} agent={agent} />)
+        visibleAgents.map((agent) => <AgentRow key={agent.id} agent={agent} />)
       )}
     </AppSidebarSection>
   );

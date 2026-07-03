@@ -1,5 +1,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentProfile } from "@/lib/state/slices/office/types";
+import { agentProfileId, workspaceId } from "@/lib/types/ids";
 
 const routerMock = vi.hoisted(() => ({
   push: vi.fn(),
@@ -12,17 +14,20 @@ const state = {
     } as Record<string, boolean>,
   },
   office: {
-    agentProfiles: [],
+    agentProfiles: [] as AgentProfile[],
     inboxItems: [],
   },
   workspaces: {
-    activeId: "workspace-1",
+    activeId: "workspace-1" as string | null,
   },
   setOfficeAgentProfiles: vi.fn(),
   toggleAppSidebarSection: vi.fn(),
   setAppSidebarCollapsed: vi.fn(),
   sessions: {
     byId: {},
+  },
+  taskSessions: {
+    items: {},
   },
 };
 
@@ -64,6 +69,8 @@ describe("AgentsSection", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    state.office.agentProfiles = [];
+    state.workspaces.activeId = "workspace-1";
   });
 
   it("renders Agent Topology as the header action before Add agent", () => {
@@ -83,5 +90,34 @@ describe("AgentsSection", () => {
     expect(topology.compareDocumentPosition(addAgent) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
+  });
+
+  it("does not render stale agent links when no office workspace is active", () => {
+    state.workspaces.activeId = null;
+    state.office.agentProfiles = [
+      {
+        id: agentProfileId("stale-agent"),
+        workspaceId: workspaceId("old-workspace"),
+        name: "Stale Agent",
+        role: "worker",
+        status: "idle",
+        budgetMonthlyCents: 0,
+        maxConcurrentSessions: 1,
+        agentId: "claude",
+        agentDisplayName: "Claude",
+        model: "claude-sonnet-4-5",
+        allowIndexing: false,
+        autoApprove: false,
+        cliFlags: [],
+        cliPassthrough: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+
+    render(<AgentsSection collapsed={false} />);
+
+    expect(screen.queryByRole("link", { name: /stale agent/i })).toBeNull();
+    expect(screen.getByText("No agents yet")).toBeTruthy();
   });
 });
