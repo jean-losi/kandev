@@ -18,6 +18,8 @@ No product spec update is required: the user-facing agent remains `codex-acp`; o
 
 Codex ACP sessions receive the model catalogue and config options from the Agent Client Protocol bridge, including model IDs that the old bridge did not expose. Existing profiles using old model or mode IDs are reconciled by the profile healer: unavailable values are cleared or replaced with the probed current values. Auth method identifiers can differ between bridge implementations, so auth UI should keep consuming advertised methods instead of hard-coding bridge-specific IDs.
 
+Codex-specific ACP `cli_flags` are not advertised because the bridge entrypoint does not apply the native Codex `-c` config overrides to chat sessions. Kandev still exposes the universal agentctl auto-approve toggle for ACP permission requests and keeps native Codex flags scoped to passthrough mode.
+
 ## Alternatives Considered
 
 - Keep relying on `@zed-industries/codex-acp` and assume npm or local symlinks redirect it. Rejected because Kandev should declare the package it intends to execute and not depend on external aliasing.
